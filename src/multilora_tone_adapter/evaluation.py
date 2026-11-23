@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from .common import digest, read_jsonl, write_json
@@ -35,8 +37,29 @@ def _artifact_binding(directory: Path) -> dict:
             "model": training["model"]}
 
 
+def _run_variant(directory: Path, model: Path, mode: str, cases: list[dict],
+                 references: list[str], memory_gb) -> list[str]:
+    """Process exit, rather than allocator cleanup, guarantees variant isolation."""
+    request = {"model_path": str(model), "adapter_path": str(directory / "adapter"),
+               "mode": mode, "cases": cases, "references": references, "memory_gb": memory_gb}
+    input_path = directory / f"evaluation-{mode}-input.json"
+    output_path = directory / f"evaluation-{mode}-output.json"
+    write_json(input_path, request)
+    output_path.unlink(missing_ok=True)
+    with (directory / f"evaluation-{mode}.log").open("w", encoding="utf-8") as log:
+        (directory / f"evaluation-{mode}.log").chmod(0o600)
+        result = subprocess.run([sys.executable, "-m", "multilora_tone_adapter.eval_worker",
+                                 str(input_path), str(output_path)], stdout=log,
+                                stderr=subprocess.STDOUT, check=False)
+    if result.returncode or not output_path.exists():
+        raise RuntimeError(f"Evaluation {mode} worker failed; inspect its private log")
+    outputs = json.loads(output_path.read_text())
+    if not isinstance(outputs, list) or len(outputs) != len(cases) or any(not isinstance(x, str) for x in outputs):
+        raise ValueError("Evaluation worker returned invalid outputs")
+    return outputs
+
+
 def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> dict:
-    from .runtime import MLXEngine
     binding = _artifact_binding(directory)
     cases = json.loads(cases_file.read_text())
     if not isinstance(cases, list) or not cases:
@@ -54,18 +77,7 @@ def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> di
     references = [r["messages"][-1]["content"] for r in rows]
     variants = {}
     for mode in ("base", "prompt", "adapter"):
-        engine = MLXEngine(model, directory / "adapter" if mode == "adapter" else None,
-                           memory_gb=memory_gb)
-        try:
-            outputs = []
-            for case in cases:
-                context = list(case.get("context", []))
-                if mode == "prompt":
-                    context = [{"speaker": "style_reference", "text": "Examples of the desired author's style: " + json.dumps(references, ensure_ascii=False)}] + context
-                outputs.append(engine.rewrite(case["draft"], context, max_output_tokens=128))
-            variants[mode] = outputs
-        finally:
-            engine.close()
+        variants[mode] = _run_variant(directory, model, mode, cases, references, memory_gb)
     blind_cases, mapping = [], {}
     for index, case in enumerate(cases):
         order = ("adapter", "prompt", "base") if index % 2 else ("prompt", "base", "adapter")

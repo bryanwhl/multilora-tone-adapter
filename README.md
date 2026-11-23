@@ -21,6 +21,8 @@ The first version supports one app and one task: **Telegram draft rewriting**. I
 - An export-capable [Telegram Desktop](https://desktop.telegram.org/) client. Export selected chats in **machine-readable JSON**. Telegram API credentials are unnecessary.
 - Codex for the default labeling workflow. The invoking agent creates bounded structured batches using your existing setup; this does not extract Codex credentials or provide a general-purpose API key.
 
+See [Telegram export instructions](docs/telegram-export.md), including the separate Mac clients and possible new-login export delay.
+
 An 8B model fitting into memory for inference does not establish that QLoRA training will fit alongside your applications. Preflight checks use the actual machine and current memory load; speed optimization is deferred.
 
 ## Install
@@ -130,7 +132,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-The standard test suite uses synthetic data and fake inference engines. Real MLX model download, fine-tuning, and HTTP inference require a separate local run. See [architecture](docs/architecture.md) and [evaluation](docs/evaluation.md).
+The standard test suite uses synthetic data and fake inference engines. Real MLX model download, fine-tuning, and HTTP inference require a separate local run. See [recorded synthetic validation](docs/validation.md), [architecture](docs/architecture.md), and [evaluation](docs/evaluation.md).
 
 ## License
 
