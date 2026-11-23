@@ -270,17 +270,15 @@ def test_real_qualification_gates(tmp_path, monkeypatch, count, accepted, change
     manifest["accepted_pairs"] = accepted
     write_json(tmp_path / "dataset/manifest.json", manifest)
 
-    class SyntheticEngine:
-        def __init__(self, model, adapter=None, **kwargs):
-            self.adapter = adapter
+    def synthetic_variant(directory, model, mode, cases, references, memory_gb):
+        return [
+            case["draft"].replace("12", "99")
+            if mode == "adapter" and change_number
+            else case["draft"]
+            for case in cases
+        ]
 
-        def rewrite(self, draft, context, **kwargs):
-            return draft.replace("12", "99") if self.adapter and change_number else draft
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("multilora_tone_adapter.runtime.MLXEngine", SyntheticEngine)
+    monkeypatch.setattr("multilora_tone_adapter.evaluation._run_variant", synthetic_variant)
     cases = [
         {"draft": f"Case {i}: send 12 units", "independently_authored": True} for i in range(count)
     ]

@@ -51,6 +51,8 @@ Preflight checks run on the actual Apple Silicon Mac. Total RAM, current load, a
 
 Training must not silently truncate away required facts or the supervised target. A model that cannot fit within the memory policy is a checkpointed blocker. Do not silently downgrade the model or move training to a hosted service.
 
+Each evaluation variant runs in a separate process so the base, prompted baseline, and adapter cannot retain one another's GPU allocations. The next worker waits up to 30 seconds for macOS to report enough headroom before loading. Cache cleanup inside a persistent service does not guarantee immediate physical memory release; restart the service after a memory guard stops generation if headroom does not recover.
+
 ## Responsibility boundaries
 
 | Component | Owns |

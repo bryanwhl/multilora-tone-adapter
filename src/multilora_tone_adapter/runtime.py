@@ -475,6 +475,12 @@ class MLXEngine:
         self._budget = budget
 
     def close(self) -> None:
+        """Drop Python model references and request MLX cache cleanup.
+
+        Framework/Metal allocations can survive this call. Only process exit
+        guarantees releasing the worker's address space; evaluations therefore
+        isolate model variants in separate processes and recheck memory each time.
+        """
         self._model = self._tokenizer = None
         gc.collect()
         if self._mx is not None:

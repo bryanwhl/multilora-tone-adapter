@@ -242,3 +242,21 @@ def test_adapter_config_mutation_or_missing_binding_rejected_before_mlx(
     with pytest.raises(ValueError, match="incomplete or does not match"):
         engine.load()
     assert not engine.loaded
+
+
+def test_close_clears_owned_state_without_claiming_os_memory_release(monkeypatch):
+    engine = runtime.MLXEngine(".")
+    engine._model = object()
+    engine._tokenizer = object()
+    engine._budget = {"budget_bytes": runtime.GIB}
+    mx = Mock()
+    engine._mx = mx
+    collect = Mock()
+    monkeypatch.setattr(runtime.gc, "collect", collect)
+    engine.close()
+    assert engine.loaded is False
+    assert engine._tokenizer is engine._budget is engine._mx is None
+    collect.assert_called_once_with()
+    mx.clear_cache.assert_called_once_with()
+    # Idempotent logical cleanup; physical RAM release belongs to process exit.
+    engine.close()
