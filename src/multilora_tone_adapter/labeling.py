@@ -137,10 +137,12 @@ def codex_label(run_dir: Path, batch_size: int = 25, model: str | None = None,
         args.append("-")
         output.unlink(missing_ok=True)
         with (run_dir / "labeler-events.log").open("a", encoding="utf-8") as log:
+            (run_dir / "labeler-events.log").chmod(0o600)
             proc = subprocess.run(args, input=prompt, text=True, cwd=run_dir, stdout=log,
                                   stderr=subprocess.STDOUT, timeout=timeout, check=False)
         if proc.returncode != 0 or not output.exists():
             raise RuntimeError("Codex labeling failed; inspect the private labeler-events.log")
+        output.chmod(0o600)
         import_labels(run_dir, output)
         completed += request["count"]
     return {"labeled": completed, "mode": "codex-exec", "model_override": model}
