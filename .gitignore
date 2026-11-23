@@ -1,0 +1,25 @@
+# Private artifacts never belong in the source repository.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.env*
+!.env.example
+data/
+private/
+runs/
+exports/
+models/
+adapters/
+checkpoints/
+*.jsonl
+*.safetensors
+*.gguf
+*.bin
+*.sqlite*
+*.log
+result.json
+config.local.*
+
