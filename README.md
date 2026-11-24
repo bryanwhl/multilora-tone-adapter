@@ -107,12 +107,14 @@ Example request using entirely fictional text:
 ```bash
 curl http://127.0.0.1:8765/v1/rewrite \
   -H 'Content-Type: application/json' \
-  --data '{"profile":"telegram","draft":"Yes, I can join tomorrow.","context":[],"max_output_tokens":128}'
+  --data '{"task":"rewrite","profile":"telegram","draft":"Yes, I can join tomorrow.","context":[],"max_output_tokens":128}'
 ```
 
 Alternatively, put the draft in a private text file and use `uv run multilora rewrite --draft-file /private/path/draft.txt`.
 
-The API binds to localhost by default. It serves one active generation initially and rejects unsupported profiles. See current `/docs` on the running service for the exact request and response schema.
+The API binds to localhost by default. It serves one active generation and returns HTTP 429 if busy. Only the `rewrite` task and `telegram` profile are supported. The JSON response contains `output`, `adapter_version`, and `meaning_validation`; a successful heuristic check still requires Codex to review semantic meaning.
+
+`GET /health` reports service and model-load state without forcing a model load. `GET /openapi.json` provides the exact request and response schema; interactive `/docs` and `/redoc` pages are disabled. Requests allow a nonblank draft up to 8,000 characters, at most 8 context messages using `speaker` and `text`, and `max_output_tokens` from 1 to 512 (default 128).
 
 ## Private data stays outside Git
 
