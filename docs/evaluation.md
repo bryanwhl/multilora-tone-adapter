@@ -22,6 +22,8 @@ Compare the same pinned base under three conditions:
 2. Base with a Telegram style prompt and examples drawn only from training data.
 3. Base with the Telegram adapter.
 
+Candidate letters are shuffled independently for each case using OS-backed randomness. The mode mapping stays in the private comparison artifact and is bound to the comparison hash. Give the judge only the blind evaluation request, never `comparison-private.json` or the worker outputs that identify each mode.
+
 Select training settings with validation data. Reserve the locked test set for a final comparison; repeated tuning against it turns it into validation data.
 
 ## Meaning comes first
