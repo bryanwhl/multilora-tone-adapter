@@ -3,7 +3,7 @@
 Turn private Telegram exports into a local writing-style adapter. Codex prepares the content of a reply; a quantized Qwen 8B model with your Telegram LoRA adapter rewrites the draft in your voice.
 
 ```text
-Telegram JSON export → original reply + preceding history
+Telegram JSON or HTML export → original reply + preceding history
                               ↓ Codex labeler
                     neutral draft → original reply
                               ↓ local QLoRA
@@ -18,10 +18,10 @@ The first version supports one app and one task: **Telegram draft rewriting**. I
 
 - Python 3.11 or later and [uv](https://docs.astral.sh/uv/).
 - Apple Silicon macOS for local MLX training and inference. Data preparation and non-MLX tests also run on Linux.
-- An export-capable [Telegram Desktop](https://desktop.telegram.org/) client. Export selected chats in **machine-readable JSON**. Telegram API credentials are unnecessary.
+- A Telegram Desktop export: machine-readable JSON or an existing HTML export directory. JSON carries stronger identity metadata; HTML requires confirmed exported author names and the export’s timezone. Telegram API credentials are unnecessary.
 - Codex for the default labeling workflow. The invoking agent creates bounded structured batches using your existing setup; this does not extract Codex credentials or provide a general-purpose API key.
 
-See [Telegram export instructions](docs/telegram-export.md), including the separate Mac clients and possible new-login export delay.
+See [Telegram export instructions](docs/telegram-export.md) for existing HTML folders, new JSON exports, author identity, and timezone handling.
 
 An 8B model fitting into memory for inference does not establish that QLoRA training will fit alongside your applications. Preflight checks use the actual machine and current memory load; speed optimization is deferred.
 
@@ -41,15 +41,27 @@ To make the workflow discoverable in Codex, install the versioned skill folder `
 
 ## First run
 
-Run the workflow inside Codex so the agent can inspect quality reports and label batches. Supply export paths and your stable exported author ID. The initial review establishes selected chats and dates, identity, exclusions, memory headroom, and representative source/input/target pairs. After that review, routine stages continue automatically; genuine data, access, resource, and quality blockers stop the run.
+Run the workflow inside Codex so the agent can inspect quality reports and label batches. Supply export paths and explicit author identity: `--author-id` for JSON, or confirmed `--author-name` values plus `--export-timezone` for HTML. The initial review establishes selected chats and dates, identity, exclusions, memory headroom, and representative source/input/target pairs. After that review, routine stages continue automatically; genuine data, access, resource, and quality blockers stop the run.
 
-The CLI provides separate resumable stages. The importer accepts individual chat exports or full-account JSON exports. Use repeatable `--chat-id` to select exported chat IDs, `--since` for an inclusive lower bound, and `--until` for an exclusive upper bound. Calendar dates mean UTC midnight; ISO timestamps must include a timezone. Selection takes recent episodes round-robin across chats up to `--limit`, preventing one busy chat from consuming the whole sample. Inspect current command help before scripting stages:
+The CLI provides separate resumable stages. The importer accepts individual chat or full-account JSON files, or one HTML export directory. Do not mix JSON files and an HTML directory in one import. Use repeatable `--chat-id` to select import chat IDs, `--since` for an inclusive lower bound, and `--until` for an exclusive upper bound. Calendar dates mean UTC midnight; ISO timestamps must include a timezone. Selection takes recent episodes round-robin across chats up to `--limit`, preventing one busy chat from consuming the whole sample. Inspect current command help before scripting stages:
 
 ```bash
 uv run multilora inspect /path/to/telegram/result.json --author-id user123456
 uv run multilora prepare /path/to/telegram/result.json --author-id user123456 --run telegram-pilot
 uv run multilora labels-request --run telegram-pilot --limit 25
 ```
+
+For an existing HTML export, confirm the exact sender name(s) and the timezone used when the export was produced. Repeat `--author-name` for known historical aliases; do not infer identity from message frequency:
+
+```bash
+uv run multilora inspect /path/to/telegram-html-export \
+  --author-name "Your exported sender name" --export-timezone Europe/London
+uv run multilora prepare /path/to/telegram-html-export \
+  --author-name "Your exported sender name" --export-timezone Europe/London \
+  --run telegram-html-pilot
+```
+
+The timezone above is illustrative, not a default. Use the confirmed IANA timezone of the export. HTML timestamps are interpreted in that zone and then converted to UTC for date filtering. Ambiguous/nonexistent local timestamps and uncertain sender attribution are quarantined. HTML chat/message identities are export-local, bound to a source snapshot manifest; they are not stable Telegram API IDs.
 
 For a bounded selection, add the same filters to both inspection and preparation:
 

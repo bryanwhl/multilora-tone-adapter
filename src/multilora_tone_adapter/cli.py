@@ -33,19 +33,41 @@ def output(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def import_options(args) -> dict:
+    return {"max_episodes": args.limit, "allowed_chat_ids": args.chat_id,
+            "since": args.since, "until": args.until,
+            "author_names": args.author_name, "export_timezone": args.export_timezone}
+
+
+def summary_report(report: dict) -> dict:
+    """Keep file paths and sender evidence in private artifacts, not terminal output."""
+    result = dict(report)
+    if "html" in result:
+        result["html"] = {key: value for key, value in result["html"].items()
+                          if key not in {"source_manifest", "chat_manifest", "sender_evidence"}}
+    return result
+
+
 def prepare(args) -> dict:
     from .dataset import assign_splits
     from .telegram import import_telegram
     directory = run_dir(args.run)
     paths = [Path(p).expanduser().resolve() for p in args.exports]
-    episodes, report = import_telegram(paths, args.author_id, max_episodes=args.limit,
-                                       allowed_chat_ids=args.chat_id, since=args.since, until=args.until)
+    episodes, report = import_telegram(paths, args.author_id, **import_options(args))
     if not episodes:
         raise ValueError("No eligible authored response episodes found; verify export and author ID")
-    config = {"source_hashes": [digest(p.read_text()) for p in paths],
-              "author_hash": digest(args.author_id), "limit": args.limit,
+    source_hashes = ([report["html"]["snapshot_hash"]] if "html" in report
+                     else [digest(p.read_text()) for p in paths])
+    config = {"source_hashes": source_hashes,
+              "author_hash": digest(args.author_name if args.author_name else args.author_id),
+              "limit": args.limit,
               "allowed_chat_ids": args.chat_id, "since": args.since, "until": args.until,
               "episodes_hash": digest(episodes), "profile": "telegram", "task": "rewrite"}
+    if "html" in report:
+        config["html"] = {"export_timezone": args.export_timezone,
+                          "identity_method": "explicit_name_mapping",
+                          "parser_version": report["html"].get("parser_version", 1),
+                          "source_manifest": report["html"]["source_manifest"]}
     config_path = directory / "run.json"
     if config_path.exists() and json.loads(config_path.read_text()) != config:
         raise ValueError("Run already exists with different inputs; choose a new run name")
@@ -53,7 +75,7 @@ def prepare(args) -> dict:
     write_jsonl(directory / "episodes.jsonl", episodes)
     write_json(directory / "import-report.json", report)
     write_json(directory / "splits.json", assign_splits(episodes))
-    return {"run": args.run, "episodes": len(episodes), "report": report,
+    return {"run": args.run, "episodes": len(episodes), "report": summary_report(report),
             "private_directory": str(directory)}
 
 
@@ -90,9 +112,13 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="multilora", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("inspect", "prepare"):
-        cmd = sub.add_parser(name, help="Inspect or normalize selected Telegram JSON exports")
+        cmd = sub.add_parser(name, help="Inspect or normalize Telegram JSON exports or an HTML directory")
         cmd.add_argument("exports", nargs="+")
-        cmd.add_argument("--author-id", required=True, help="Stable Telegram sender ID, e.g. user12345")
+        identity = cmd.add_mutually_exclusive_group(required=True)
+        identity.add_argument("--author-id", help="Stable Telegram sender ID for JSON, e.g. user12345")
+        identity.add_argument("--author-name", action="append",
+                              help="Confirmed exact sender name for HTML; repeat for aliases")
+        cmd.add_argument("--export-timezone", help="Confirmed IANA timezone for HTML wall times")
         cmd.add_argument("--limit", type=int, default=2000)
         cmd.add_argument("--chat-id", action="append", help="Restrict to this exported chat ID; repeatable")
         cmd.add_argument("--since", help="Inclusive UTC date or timezone-aware ISO timestamp")
@@ -149,9 +175,8 @@ def main(argv=None) -> int:
         if cmd == "inspect":
             from .telegram import import_telegram
             episodes, report = import_telegram([Path(p).expanduser() for p in args.exports],
-                                                args.author_id, max_episodes=args.limit,
-                                                allowed_chat_ids=args.chat_id, since=args.since, until=args.until)
-            output({"episodes": len(episodes), "report": report})
+                                                args.author_id, **import_options(args))
+            output({"episodes": len(episodes), "report": summary_report(report)})
         elif cmd == "prepare":
             output(prepare(args))
         elif cmd == "preflight":

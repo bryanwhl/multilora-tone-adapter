@@ -21,5 +21,10 @@ checkpoints/
 *.sqlite*
 *.log
 result.json
+messages*.html
+export_results.html
+chats.html
+personal_information.html
+contacts.html
 config.local.*
 
