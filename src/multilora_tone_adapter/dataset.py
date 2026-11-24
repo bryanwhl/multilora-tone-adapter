@@ -137,7 +137,7 @@ def build_dataset(
             rejected["meaning_not_confirmed"] += 1
         elif not isinstance(draft, str) or not draft.strip():
             rejected["empty_draft"] += 1
-        elif _normalized(draft) == _normalized(target):
+        elif draft.strip() == target.strip():
             rejected["copied_target"] += 1
         elif label.get("target_hash", digest(target)) != digest(target):
             rejected["target_hash_mismatch"] += 1

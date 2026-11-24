@@ -132,6 +132,27 @@ def test_generic_acknowledgements_do_not_merge_all_sessions():
     assert set(assign_splits(episodes).values()) == {"train", "valid", "test"}
 
 
+def test_style_pairs_preserve_case_and_punctuation_only_changes(tmp_path):
+    episodes = independent_episodes()
+    labels = [{"id": e["id"], "draft": e["target"].capitalize().replace("!", "."),
+               "meaning_preserved": True} for e in episodes]
+    out = tmp_path / "dataset"
+    manifest = build_dataset(episodes, labels, out, min_episodes=10)
+    assert manifest["accepted_pairs"] == 10
+    row = read_jsonl(out / "train.jsonl")[0]
+    assert json.loads(row["messages"][1]["content"])["draft"] == "Apple please."
+    assert row["messages"][2]["content"] == "apple please!"
+
+
+def test_style_pairs_still_reject_exact_copies(tmp_path):
+    episodes = independent_episodes()
+    labels = labels_for(episodes)
+    labels[0]["draft"] = episodes[0]["target"]
+    manifest = build_dataset(episodes, labels, tmp_path / "dataset", min_episodes=9)
+    assert manifest["accepted_pairs"] == 9
+    assert manifest["rejected"] == {"copied_target": 1}
+
+
 def test_build_freezes_pure_mlx_rows_and_provenance(tmp_path):
     episodes = independent_episodes()
     labels = labels_for(episodes)
