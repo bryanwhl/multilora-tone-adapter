@@ -8,6 +8,10 @@ PATTERNS = {
     'credential': re.compile(r'(?:gh[pousr]_[A-Za-z0-9]{25,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9_-]{25,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)'),
     'personal_absolute_path': re.compile(r'/(?:Users|home)/[^/\s]+/'),
     'telegram_export': re.compile(r'"(?:from_id|personal_information)"\s*:'),
+    'telegram_html_export': re.compile(
+        r'''<div\b(?=[^>]*\bclass\s*=\s*["'][^"']*\bmessage\b[^"']*["'])'''
+        r'''(?=[^>]*\bid\s*=\s*["']message-?\d+["'])[^>]*>''', re.I,
+    ),
 }
 
 
@@ -17,6 +21,8 @@ def _inspect(name: str, content: bytes, source: str) -> list[dict]:
     if ((path.name.startswith('.env') and path.name != '.env.example')
         or path.name in {'auth.json', 'credentials.json', 'secrets.json'}
         or path.name.startswith('config.local.')
+        or re.fullmatch(r'messages(?:[0-9]+)?\.html', path.name, re.I)
+        or path.name.lower() in {'export_results.html', 'chats.html', 'personal_information.html', 'contacts.html'}
         or path.suffix in {'.jsonl', '.safetensors', '.gguf', '.bin', '.sqlite', '.log'}) or any(
         part in {'exports', 'private', 'runs', 'adapters', 'models', 'data'} for part in path.parts
     ):
@@ -26,7 +32,7 @@ def _inspect(name: str, content: bytes, source: str) -> list[dict]:
     text = content.decode('utf-8', errors='replace')
     for rule, pattern in PATTERNS.items():
         if pattern.search(text):
-            if rule == 'telegram_export' and name.startswith('tests/'):
+            if rule in {'telegram_export', 'telegram_html_export'} and name.startswith('tests/'):
                 continue  # Reviewed inline synthetic fixtures only.
             findings.append({'path': name, 'rule': rule, 'source': source})
     return findings

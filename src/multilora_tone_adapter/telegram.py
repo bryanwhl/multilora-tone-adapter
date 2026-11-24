@@ -1,4 +1,4 @@
-"""Deterministic, read-only normalization of official Telegram JSON exports."""
+"""Deterministic, read-only normalization of Telegram JSON and HTML exports."""
 
 # Export schema errors are invalid data values, consistently surfaced as ValueError.
 # ruff: noqa: TRY004
@@ -91,7 +91,7 @@ def _timestamp(message: dict) -> datetime:
 
 def import_telegram(
     paths: list[Path],
-    author_id: str,
+    author_id: str | None = None,
     max_episodes: int = 2000,
     *,
     burst_gap_seconds: int = 120,
@@ -100,15 +100,43 @@ def import_telegram(
     allowed_chat_ids: list[str] | None = None,
     since: str | None = None,
     until: str | None = None,
+    author_names: list[str] | None = None,
+    export_timezone: str | None = None,
 ) -> tuple[list[dict], dict]:
-    """Normalize individual/full-account exports; never infer identity from display names.
+    """Normalize exports with numeric JSON identity or confirmed HTML sender names.
+
+    HTML names are explicitly confirmed export-local mappings, not verified Telegram IDs.
 
     Repeated exports merge by exact app/chat/message identity. Conflicting versions fail
     closed so edited history cannot silently change a frozen training run. Date filtering
     uses [since, until); a calendar date means UTC midnight. Media/secret-bearing
     messages are quarantined before episodes or context can reach a remote labeler.
     """
-    own = _author(author_id)
+    html_report = None
+    if author_names is not None:
+        from .telegram_html import normalize_html_export
+
+        if author_id is not None or len(paths) != 1:
+            raise ValueError("HTML import requires one export directory and confirmed author names")
+        if not export_timezone:
+            raise ValueError("HTML import requires the confirmed export timezone")
+        payload, html_report = normalize_html_export(
+            Path(paths[0]).expanduser().resolve(),
+            author_names=author_names,
+            export_timezone=export_timezone,
+        )
+        payloads = [payload]
+        own = "html-self"
+    else:
+        if export_timezone is not None:
+            raise ValueError("Export timezone is only supported with HTML author names")
+        own = _author(author_id)
+        payloads = []
+        for path in sorted({Path(p).resolve() for p in paths}):
+            if path.is_dir() or path.suffix.lower() in {".html", ".htm"}:
+                raise ValueError("HTML import requires --author-name and --export-timezone")
+            with path.open(encoding="utf-8") as stream:
+                payloads.append(json.load(stream))
     lower, upper = _date_bound(since), _date_bound(until)
     if lower is not None and upper is not None and lower >= upper:
         raise ValueError("Date range requires since before exclusive until")
@@ -119,9 +147,7 @@ def import_telegram(
         raise ValueError("Invalid context or session limits")
     counts: Counter = Counter()
     chats: dict[str, dict[str, dict]] = {}
-    for path in sorted({Path(p).resolve() for p in paths}):
-        with path.open(encoding="utf-8") as stream:
-            payload = json.load(stream)
+    for payload in payloads:
         if not isinstance(payload, dict):
             raise ValueError("Expected an official Telegram JSON object")
         if isinstance(payload.get("chats"), dict):
@@ -197,6 +223,7 @@ def import_telegram(
                     "eligible": eligible,
                     "sender": str(sender),
                     "raw_id": str(message["id"]),
+                    "barrier_before": bool(message.get("html_barrier_before")),
                 }
             )
         normalized.sort(
@@ -213,6 +240,7 @@ def import_telegram(
             current = normalized[index]
             if (
                 not session
+                or current["barrier_before"]
                 or (current["stamp"] - session[-1]["stamp"]).total_seconds() > session_gap_seconds
             ):
                 session = []
@@ -232,6 +260,7 @@ def import_telegram(
                 candidate = normalized[end]
                 if (
                     not candidate["eligible"]
+                    or candidate["barrier_before"]
                     or not candidate["own"]
                     or (candidate["stamp"] - burst[-1]["stamp"]).total_seconds() > burst_gap_seconds
                 ):
@@ -277,7 +306,7 @@ def import_telegram(
             if by_chat[chat_id] and len(selected) < max_episodes:
                 selected.append(by_chat[chat_id].pop())
     episodes = sorted(selected, key=lambda e: (e["timestamp"], e["id"]))
-    return episodes, {
+    report = {
         "schema_version": 1,
         **dict(counts),
         "chats": len(chats),
@@ -287,3 +316,7 @@ def import_telegram(
         "selected_episodes": len(episodes),
         "truncated_episodes": total - len(episodes),
     }
+    if html_report is not None:
+        report["source_format"] = "html"
+        report["html"] = html_report
+    return episodes, report
