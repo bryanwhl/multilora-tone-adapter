@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -79,8 +80,10 @@ def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> di
     for mode in ("base", "prompt", "adapter"):
         variants[mode] = _run_variant(directory, model, mode, cases, references, memory_gb)
     blind_cases, mapping = [], {}
+    shuffler = secrets.SystemRandom()
     for index, case in enumerate(cases):
-        order = ("adapter", "prompt", "base") if index % 2 else ("prompt", "base", "adapter")
+        order = ["base", "prompt", "adapter"]
+        shuffler.shuffle(order)
         candidates = {chr(65 + i): variants[mode][index] for i, mode in enumerate(order)}
         mapping[str(index)] = {chr(65 + i): mode for i, mode in enumerate(order)}
         blind_cases.append({"id": str(index), "draft": case["draft"],
