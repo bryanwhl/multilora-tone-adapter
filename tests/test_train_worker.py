@@ -132,9 +132,15 @@ def test_programmatic_noninteger_or_nonpositive_budgets_rejected(budget):
         train_worker.cache_limit_bytes(budget)
 
 
+@pytest.mark.parametrize("real_child_permissions", [False, True])
 def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_guards(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, real_child_permissions
 ):
+    if real_child_permissions and runtime.os.name != "posix":
+        pytest.skip("Training child umask is a POSIX contract")
+    # Fail if training ever mutates the caller-wide mask instead of the child mask.
+    parent_umask = Mock(side_effect=AssertionError("caller umask must not be modified"))
+    monkeypatch.setattr(runtime.os, "umask", parent_umask)
     data, model, adapter = (tmp_path / name for name in ("data", "model", "adapter"))
     data.mkdir()
     model.mkdir()
@@ -169,11 +175,22 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
     monkeypatch.setattr(runtime.subprocess, "run", help_check)
     launched = []
     child = object()
+    real_popen = runtime.subprocess.Popen
 
     def launch(command, **kwargs):
         launched.append((command, kwargs))
-        (adapter / "adapters.safetensors").write_bytes(b"synthetic-adapter")
-        (adapter / "adapter_config.json").write_text("{}")
+        if real_child_permissions:
+            # Exercise the exact captured child settings without importing a model.
+            script = (
+                "from pathlib import Path; "
+                "Path('adapters.safetensors').write_bytes(b'synthetic-adapter'); "
+                "Path('adapter_config.json').write_text('{}')"
+            )
+            with real_popen([sys.executable, "-c", script], **kwargs) as permission_child:
+                assert permission_child.wait(timeout=10) == 0
+        else:
+            (adapter / "adapters.safetensors").write_bytes(b"synthetic-adapter")
+            (adapter / "adapter_config.json").write_text("{}")
         return child
 
     monkeypatch.setattr(runtime.subprocess, "Popen", launch)
@@ -193,6 +210,12 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
     assert help_check.call_args.args[0] == [sys.executable, "-m", "mlx_lm.lora", "--help"]
     supervise.assert_called_once_with(child, budget)
     assert kwargs["env"]["HF_HUB_OFFLINE"] == "1"
+    assert kwargs["umask"] == 0o077
+    parent_umask.assert_not_called()
+    if real_child_permissions:
+        for name in ("adapters.safetensors", "adapter_config.json"):
+            assert (adapter / name).stat().st_mode & 0o777 == 0o600
+        assert adapter.stat().st_mode & 0o777 == 0o700
     assert result["worker"] == {
         "module": "multilora_tone_adapter.train_worker",
         "memory_budget_bytes": budget["budget_bytes"],

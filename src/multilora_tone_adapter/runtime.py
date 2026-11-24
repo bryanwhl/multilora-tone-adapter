@@ -409,7 +409,12 @@ def train(
         with log_path.open("w", encoding="utf-8") as log:
             log_path.chmod(0o600)
             process = subprocess.Popen(
-                command, stdout=log, stderr=subprocess.STDOUT, env=environment, cwd=adapter_dir
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                env=environment,
+                cwd=adapter_dir,
+                umask=0o077,
             )
             metadata["execution"] = _supervise(process, budget)
         weights = adapter_dir / "adapters.safetensors"
