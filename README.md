@@ -82,7 +82,7 @@ uv run multilora download-model
 uv run multilora train --run telegram-pilot
 ```
 
-For explicit unattended labeling through the installed Codex CLI, `uv run multilora label --run telegram-pilot` uses the user's existing configuration. For example: `uv run multilora label --run telegram-pilot --batch-size 25 --max-batches 100`. Optional `--model MODEL` changes the Codex model; the batch flags bound work. The current CLI supports Codex model overrides, not an arbitrary hosted-provider API. This mode starts separate ephemeral Codex runs and remains subject to account limits. The invoking-agent batch workflow above is the default.
+For explicit unattended labeling through the installed Codex CLI, `uv run multilora label --run telegram-pilot` uses the user's existing configuration. For example: `uv run multilora label --run telegram-pilot --batch-size 25 --max-batches 100`. Optional `--model MODEL` changes the Codex model; the batch flags bound work. The current CLI supports Codex model overrides, not an arbitrary hosted-provider API. This mode starts separate ephemeral Codex runs and remains subject to account limits. The invoking-agent batch workflow above is the default. Malformed responses receive at most two fresh retries against the unchanged batch; source changes and process failures stop immediately. Exact response IDs are validated rather than repaired.
 
 Evaluate on independently prepared drafts against the same base with and without a style prompt. Each case must declare `independently_authored: true`; this is a provenance assertion, not automatic verification. The evaluation command writes a private blind comparison request. Codex judges that request, then imports the judgments before activation:
 
