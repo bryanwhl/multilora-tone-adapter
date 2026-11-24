@@ -69,8 +69,11 @@ def validate_meaning(draft: str, output: str) -> list[str]:
         ):
             errors.append("changed_weekday")
             break
+    # Explicit auxiliary stems avoid treating ordinary words such as "want" as negation.
     negative = (
-        r"\b(?:not|no|never|cannot|can't|cant|won't|wont|don't|dont|isn't|isnt|didn't|didnt)\b"
+        r"\b(?:not|no|never|cannot|"
+        r"(?:ca|wo|sha|ai|do|does|did|is|are|was|were|have|has|had|"
+        r"could|would|should|must|might|need|ought|dare)n['‘’]?t)\b"
     )
     if bool(re.search(negative, draft, re.I)) != bool(re.search(negative, output, re.I)):
         errors.append("changed_negation")
