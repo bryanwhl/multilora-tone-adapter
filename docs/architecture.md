@@ -49,6 +49,8 @@ Version one uses a single active generation and one Telegram adapter. The base s
 
 Preflight checks run on the actual Apple Silicon Mac. Total RAM, current load, available disk, and reserved app headroom determine whether the 8B workflow is a candidate. A newer chip with less memory may support less training headroom than an older chip with more memory.
 
+Before LoRA startup, a dedicated training worker sets MLX's advisory memory limit to the agreed budget and limits the free-buffer cache to the smaller of 256 MiB or one sixteenth of that budget. These settings are not a hard OS allocation cap. The parent independently monitors process RSS, macOS memory pressure, and application headroom, stopping the run when measured limits are exceeded; brief allocation spikes can occur between checks. See the [MLX allocator API](https://github.com/ml-explore/mlx/blob/main/mlx/memory.h).
+
 Training must not silently truncate away required facts or the supervised target. A model that cannot fit within the memory policy is a checkpointed blocker. Do not silently downgrade the model or move training to a hosted service.
 
 Each evaluation variant runs in a separate process so the base, prompted baseline, and adapter cannot retain one another's GPU allocations. The next worker waits up to 30 seconds for macOS to report enough headroom before loading. Cache cleanup inside a persistent service does not guarantee immediate physical memory release; restart the service after a memory guard stops generation if headroom does not recover.

@@ -31,6 +31,7 @@ from .common import (
     state_root,
     write_json,
 )
+from .train_worker import cache_limit_bytes
 
 GIB = 1024**3
 
@@ -327,6 +328,12 @@ def train(
     try:
         budget = preflight(memory_gb)
         metadata["preflight"] = budget
+        metadata["worker"] = {
+            "module": "multilora_tone_adapter.train_worker",
+            "memory_budget_bytes": budget["budget_bytes"],
+            "cache_limit_bytes": cache_limit_bytes(budget["budget_bytes"]),
+            "memory_limit_advisory": True,
+        }
         metadata["model"] = model_fingerprint(model_path)
         if metadata["model"]["weight_bytes"] * 1.15 + GIB > budget["budget_bytes"]:
             raise RuntimeError(
@@ -353,7 +360,10 @@ def train(
         command = [
             sys.executable,
             "-m",
-            "mlx_lm.lora",
+            "multilora_tone_adapter.train_worker",
+            "--memory-budget-bytes",
+            str(budget["budget_bytes"]),
+            "--",
             "--model",
             str(view),
             "--train",
