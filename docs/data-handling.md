@@ -4,7 +4,7 @@ The public repository is source-only. Training data and trained artifacts remain
 
 ## Storage boundaries
 
-Private state defaults to `~/.local/share/multilora-tone-adapter`, outside the checkout. Keep raw exports in another private location. Private artifacts include normalized messages, source maps, generated neutral drafts, datasets, sample reports, evaluation cases and judgments, checkpoints, adapters, and body-containing logs.
+Private state defaults to `~/.local/share/multilora-tone-adapter`, outside the checkout. Keep raw exports in another private location. Private artifacts include normalized messages, source maps, generated neutral drafts, datasets, sample reports, evaluation cases and judgments, checkpoints, adapters, and body-containing logs. Run-specific summaries, identifiers, hashes, counts, quality metrics, timings, hardware observations, and output examples also stay private, even when they contain no message bodies.
 
 Private output directories use owner-only permissions. Do not move private state into the repository, a public web root, or a shared synchronization folder. Environment overrides change the location; they do not make its contents safe to publish.
 
@@ -41,7 +41,7 @@ Keep context-trained historical runs intact. Rebuilding draft-only datasets and 
 
 Before committing or pushing:
 
-1. Inspect the staged path list and diff. Only source, synthetic tests, docs, configuration templates, and the skill belong there.
+1. Inspect the staged path list and diff. Only source, wholly synthetic tests and examples, reusable documentation, configuration templates, and the skill belong there. Do not include individual training-run reports or user-specific configuration values.
 2. Run `multilora audit-public` from the repository and investigate every finding. The audit scans staged blobs, tracked working-tree files, and reachable Git history. A clean scan still requires a human/agent review of the publication candidates.
 3. Confirm ignored exports, JSONL datasets, weights, adapters, credentials, and private reports are absent from the index.
 4. Inspect new file contents; a clean automated scan is not proof that every value is nonsensitive.

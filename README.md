@@ -154,7 +154,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-The standard test suite uses synthetic data and fake inference engines. Real MLX model download, fine-tuning, and HTTP inference require a separate local run. See [recorded synthetic validation](docs/validation.md), [architecture](docs/architecture.md), and [evaluation](docs/evaluation.md).
+The standard test suite uses synthetic data and fake inference engines. Real MLX model download, fine-tuning, and HTTP inference require a separate local run. See the [validation guide](docs/validation.md), [architecture](docs/architecture.md), and [evaluation](docs/evaluation.md).
 
 ## License
 

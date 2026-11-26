@@ -64,7 +64,7 @@ def test_ambiguous_dates_and_identity_fail_closed(tmp_path):
     with pytest.raises(ValueError, match="ambiguous"):
         import_telegram([path], "1")
     with pytest.raises(ValueError, match="numeric"):
-        import_telegram([path], "Bryan")
+        import_telegram([path], "Example Author")
 
 
 def test_forwarded_messages_excluded_and_break_bursts(tmp_path):
