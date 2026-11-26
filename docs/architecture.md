@@ -1,15 +1,15 @@
 # Architecture
 
-The local model is a style rewriter. Codex decides what the message should say and supplies the content; the adapter changes expression without changing facts or intent.
+The local model is a style rewriter. Codex decides what the message should say and supplies only the completed draft; the adapter changes expression without changing facts or intent. Conversation history is available during curation and to Codex when composing a reply, but is never part of the local model's training, evaluation, or inference input.
 
 ## Training path
 
-1. Import selected Telegram Desktop JSON exports and identify the author by stable exported ID.
+1. Import selected Telegram Desktop JSON exports using a stable exported author ID, or an HTML export using confirmed author names and export timezone.
 2. Apply selected exported chat IDs and the inclusive/exclusive date range; exclude secret-pattern and media-bearing messages before labeling. Reconstruct authored response episodes, including adjacent message bursts and only preceding context. Select recent episodes round-robin across selected chats up to the configured limit.
 3. Split source groups without overlapping message windows or duplicates across train, validation, and test.
 4. Give the labeler both preceding history and the authentic reply. Generate a neutral draft with the same meaning; keep the authentic reply as the unchanged target.
 5. Validate structured labels, provenance, and protected content. Quarantine failed pairs rather than fabricating targets.
-6. Export the versioned training dataset and manifest into private state.
+6. Export draft-only training inputs, unchanged authentic targets, and a versioned manifest into private state. Keep history in curation records and grouped split provenance, outside model messages.
 7. Pin the base model revision, validate token lengths and prompt masking, and train a QLoRA adapter locally.
 8. Compare against prompt-only baselines and activate only a qualified candidate.
 
@@ -22,20 +22,26 @@ The collection target is 2,000 unique usable episodes. A 500-episode run is expl
 ```json
 [
   {"role": "system", "content": "Rewrite the supplied draft ..."},
-  {"role": "user", "content": "{\"context\": [], \"draft\": \"A neutral draft\"}"},
+  {"role": "user", "content": "{\"draft\": \"A neutral draft\"}"},
   {"role": "assistant", "content": "The authentic authored target"}
 ]
 ```
 
-Inference omits the final assistant target. Training masks the prompt and supervises only the final target. The original reply is available to the labeler during pair creation, but never as an inference input to the trainable model.
+Inference omits the final assistant target. Training masks the prompt and supervises only the final target. The original reply and preceding history are available to the labeler during pair creation. Neither history nor a reference reply is passed to the adapter during inference. The local model receives the draft through the same serialization in training and daily use.
+
+The evaluation-only prompted baseline adds fixed style examples drawn from training data to its system instructions. Those examples are a comparator, not conversation history or a production input field. Base and adapter variants use the canonical system instruction and draft-only user payload; the production API accepts neither context nor style-reference examples.
+
+Dataset manifests use `schema_version: 2`. The manifest, training record, and evaluation binding each carry `input_contract` with `name: "draft-only-v1"` and a `sha256` covering the contract version, system instruction, and sole user field `draft`. Training rejects legacy rows or manifests that do not match this contract. Loading an adapter, including `serve --candidate`, rejects an incompatible training contract. Qualification from a context-trained run cannot qualify a draft-only run.
+
+For migration, preserve the old run and build a new dataset from retained source episodes and labels in a new private run. Reuse the same source grouping so overlapping messages and duplicate clusters stay in one split. Keep authentic targets unchanged; remove history from model inputs through the dataset builder, then retrain and evaluate. Never relabel a legacy manifest as compatible or apply an old adapter after merely deleting the inference context.
 
 ## Runtime path
 
 ```text
 User goal
   → Codex determines intended answer
-  → POST /v1/rewrite with draft and optional context
-  → validate profile and request
+  → POST /v1/rewrite with completed draft only
+  → validate profile and request; reject context and unknown fields
   → serialize common.messages_for
   → local Qwen 8B + Telegram adapter
   → protected-content checks
@@ -61,8 +67,8 @@ Each evaluation variant runs in a separate process so the base, prompted baselin
 | --- | --- |
 | Codex skill | Initial review, batch labeling, report interpretation, orchestration, final meaning review |
 | Telegram importer | Author identity, text entities, chronology, source references, response episodes |
-| Dataset builder | Accepted pairs, grouped splits, provenance, hashes, atomic outputs |
-| MLX runtime | Pinned model, token validation, local QLoRA and inference |
+| Dataset builder | Draft-only inputs, authentic targets, grouped splits, provenance, hashes, atomic outputs |
+| MLX runtime | Compatible input contract, pinned model, token validation, local QLoRA and inference |
 | Local API | Input validation, explicit profile routing, bounded concurrency, safe error responses |
 | Private state | Exports' derivatives, datasets, labels, candidate adapters, evaluation records |
 

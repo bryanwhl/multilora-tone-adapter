@@ -13,13 +13,13 @@ class Engine:
         self.calls = []
         self.output = "hello there"
 
-    def rewrite(self, draft, context, max_output_tokens=128):
-        self.calls.append((draft, context, max_output_tokens))
+    def rewrite(self, draft, *, max_output_tokens=128):
+        self.calls.append((draft, max_output_tokens))
         self.loaded = True
         return self.output
 
 
-def test_health_is_lazy_and_request_uses_canonical_context():
+def test_health_is_lazy_and_request_uses_only_draft():
     engine = Engine()
     client = TestClient(create_app(engine, adapter_version="candidate-1"))
     assert client.get("/health").json()["loaded"] is False
@@ -29,12 +29,11 @@ def test_health_is_lazy_and_request_uses_canonical_context():
             "task": "rewrite",
             "profile": "telegram",
             "draft": "hello",
-            "context": [{"speaker": "self", "text": "previous message"}],
             "max_output_tokens": 40,
         },
     )
     assert response.status_code == 200
-    assert engine.calls == [("hello", [{"speaker": "self", "text": "previous message"}], 40)]
+    assert engine.calls == [("hello", 40)]
     assert response.json()["adapter_version"] == "candidate-1"
     assert "semantic review" in response.json()["meaning_validation"]
 
@@ -48,14 +47,16 @@ def test_meaning_failure_never_returns_unsafe_output():
     assert engine.output not in response.text
 
 
-def test_context_numbers_do_not_replace_draft_numbers():
+def test_context_is_rejected_even_when_empty_or_null():
     engine = Engine()
-    engine.output = "hello there"
-    response = TestClient(create_app(engine)).post(
-        "/v1/rewrite",
-        json={"draft": "hello", "context": [{"speaker": "other-a", "text": "arrive at 8"}]},
-    )
-    assert response.status_code == 200
+    client = TestClient(create_app(engine))
+    for context in ([], None, [{"speaker": "other", "text": "arrive at 8"}]):
+        response = client.post("/v1/rewrite", json={"draft": "hello", "context": context})
+        assert response.status_code == 422
+    assert not engine.calls
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["RewriteRequest"]
+    assert "context" not in schema["properties"]
+    assert schema["additionalProperties"] is False
 
 
 def test_strict_request_bounds_and_no_arbitrary_paths():

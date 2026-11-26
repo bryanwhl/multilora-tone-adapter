@@ -14,18 +14,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .labeling import validate_meaning
 
 
-class ContextMessage(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    speaker: str = Field(min_length=1, max_length=80)
-    text: str = Field(min_length=1, max_length=4000)
-
-
 class RewriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     task: Literal["rewrite"] = "rewrite"
     profile: Literal["telegram"] = "telegram"
     draft: str = Field(min_length=1, max_length=8000)
-    context: list[ContextMessage] = Field(default_factory=list, max_length=8)
     max_output_tokens: int = Field(default=128, ge=1, le=512)
 
     @field_validator("draft")
@@ -89,7 +82,6 @@ def create_app(engine, adapter_version: str = "base", token: str | None = None) 
             try:
                 output = engine.rewrite(
                     body.draft,
-                    [row.model_dump() for row in body.context],
                     max_output_tokens=body.max_output_tokens,
                 )
             except ValueError:

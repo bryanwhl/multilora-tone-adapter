@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from multilora_tone_adapter import runtime
-from multilora_tone_adapter.common import messages_for, write_jsonl
+from multilora_tone_adapter.common import input_contract, messages_for, write_json, write_jsonl
 
 
 def test_import_is_lazy():
@@ -120,7 +120,7 @@ def fake_mlx_dataset(monkeypatch):
 
 
 def test_actual_mask_boundary_and_no_silent_truncation(fake_mlx_dataset, tmp_path):
-    write_jsonl(tmp_path / "train.jsonl", [{"messages": messages_for("A draft.", [], "A reply.")}])
+    write_jsonl(tmp_path / "train.jsonl", [{"messages": messages_for("A draft.", target="A reply.")}])
     result = runtime.verify_training_rows(tmp_path, Tokenizer(), Tokenizer(), 4096)
     assert result["masking_verified"]
     with pytest.raises(ValueError, match="truncate"):
@@ -132,7 +132,7 @@ def test_mask_boundary_mismatch_is_rejected(fake_mlx_dataset, tmp_path):
         def apply_chat_template(self, *args, **kwargs):
             return super().apply_chat_template(*args, **kwargs) + [999]
 
-    write_jsonl(tmp_path / "train.jsonl", [{"messages": messages_for("Draft", [], "Reply")}])
+    write_jsonl(tmp_path / "train.jsonl", [{"messages": messages_for("Draft", target="Reply")}])
     with pytest.raises(ValueError, match="masking boundary"):
         runtime.verify_training_rows(tmp_path, Tokenizer(), WrongTokenizer(), 4096)
 
@@ -140,6 +140,7 @@ def test_mask_boundary_mismatch_is_rejected(fake_mlx_dataset, tmp_path):
 def test_training_failure_is_persisted_and_never_qualified(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "preflight", Mock(side_effect=RuntimeError("pressure")))
     adapter = tmp_path / "candidate"
+    write_json(tmp_path / "data/manifest.json", {"input_contract": input_contract()})
     with pytest.raises(RuntimeError):
         runtime.train(tmp_path / "data", tmp_path / "model", adapter)
     metadata = json.loads((adapter / "training.json").read_text())
@@ -223,6 +224,7 @@ def test_adapter_config_mutation_or_missing_binding_rejected_before_mlx(
     config.write_text('{"lora_parameters":{"scale":20}}')
     metadata = {
         "status": "succeeded",
+        "input_contract": input_contract(),
         "model": {"fingerprint": "original-model"},
         "adapter_sha256": runtime.file_sha256(weights),
         "adapter_config_sha256": runtime.file_sha256(config),

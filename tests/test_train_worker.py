@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from multilora_tone_adapter import runtime, train_worker
+from multilora_tone_adapter.common import input_contract, write_json
 
 
 @pytest.fixture
@@ -145,6 +146,7 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
     data.mkdir()
     model.mkdir()
     (data / "train.jsonl").write_text("{}\n")
+    write_json(data / "manifest.json", {"input_contract": input_contract()})
     budget = {
         "budget_bytes": 7 * runtime.GIB,
         "reserve_bytes": 3 * runtime.GIB,

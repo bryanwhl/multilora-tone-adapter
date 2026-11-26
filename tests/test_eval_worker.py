@@ -1,7 +1,6 @@
 """Variant isolation and worker lifecycle contracts without loading MLX."""
 
 import copy
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,8 +19,8 @@ def test_worker_inputs_match_rewrite_contract_without_mutating_request(monkeypat
         def __init__(self, model, adapter, **kwargs):
             calls.append(("init", model, adapter, kwargs))
 
-        def rewrite(self, draft, context, **kwargs):
-            calls.append(("rewrite", draft, copy.deepcopy(context), kwargs))
+        def rewrite(self, draft, **kwargs):
+            calls.append(("rewrite", draft, kwargs))
             return "styled " + draft
 
         def close(self):
@@ -33,8 +32,8 @@ def test_worker_inputs_match_rewrite_contract_without_mutating_request(monkeypat
         "model_path": "synthetic-model",
         "adapter_path": "synthetic-adapter",
         "cases": [
-            {"draft": "First draft", "context": [{"speaker": "other", "text": "Hi"}]},
-            {"draft": "Second draft"},
+            {"draft": "First draft", "independently_authored": True},
+            {"draft": "Second draft", "independently_authored": True},
         ],
         "references": ["authentic synthetic style"],
         "memory_gb": 6,
@@ -43,22 +42,16 @@ def test_worker_inputs_match_rewrite_contract_without_mutating_request(monkeypat
     assert eval_worker.generate(request) == ["styled First draft", "styled Second draft"]
     assert request == original
     assert closed == [True]
+    options = {"memory_gb": 6}
+    if mode == "prompt":
+        options["evaluation_style_references"] = original["references"]
     assert calls[0] == (
-        "init",
-        Path("synthetic-model"),
+        "init", Path("synthetic-model"),
         Path("synthetic-adapter") if mode == "adapter" else None,
-        {"memory_gb": 6},
+        options,
     )
     for index, call in enumerate(calls[1:]):
-        expected_context = original["cases"][index].get("context", [])
-        if mode == "prompt":
-            assert call[2][0]["speaker"] == "style_reference"
-            assert json.dumps(original["references"], ensure_ascii=False) in call[2][0]["text"]
-            assert call[2][1:] == expected_context
-        else:
-            assert call[2] == expected_context
-        assert call[1] == original["cases"][index]["draft"]
-        assert call[3] == {"max_output_tokens": 128}
+        assert call == ("rewrite", original["cases"][index]["draft"], {"max_output_tokens": 128})
 
 
 def test_worker_closes_engine_when_generation_fails(monkeypatch):
@@ -81,7 +74,7 @@ def test_worker_closes_engine_when_generation_fails(monkeypatch):
                 "mode": "adapter",
                 "model_path": "model",
                 "adapter_path": "adapter",
-                "cases": [{"draft": "draft"}],
+                "cases": [{"draft": "draft", "independently_authored": True}],
                 "references": [],
             }
         )

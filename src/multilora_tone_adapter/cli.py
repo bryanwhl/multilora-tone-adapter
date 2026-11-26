@@ -152,7 +152,7 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--memory-gb", type=float)
         elif name == "evaluate":
             cmd.add_argument("--cases", type=Path, required=True,
-                             help="JSON array of independently prepared {draft,context} objects")
+                             help="JSON array of {draft, independently_authored: true}; no context")
             cmd.add_argument("--memory-gb", type=float)
         elif name == "evaluate-import":
             cmd.add_argument("--input", type=Path, required=True)
@@ -233,7 +233,8 @@ def main(argv=None) -> int:
 
                 from .api import create_app
                 from .evaluation import verify_active
-                from .runtime import MLXEngine
+                from .runtime import MLXEngine, verify_adapter_contract
+                verify_adapter_contract(directory / "adapter")
                 if not args.candidate:
                     verify_active(directory)
                 engine = MLXEngine(resolve_model(directory), directory / "adapter",
