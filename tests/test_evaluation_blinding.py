@@ -13,7 +13,7 @@ def test_per_case_shuffle_controls_letters_and_only_private_mapping_identifies_v
     modes = ["base", "prompt", "adapter"]
     permutations = list(itertools.permutations(modes))
     cases = [
-        {"draft": f"Synthetic draft {index}", "context": [], "independently_authored": True}
+        {"draft": f"Synthetic draft {index}", "independently_authored": True}
         for index in range(len(permutations))
     ]
     write_json(tmp_path / "cases.json", cases)
@@ -64,7 +64,7 @@ def test_per_case_shuffle_controls_letters_and_only_private_mapping_identifies_v
         "cases",
     }
     for index, blind_case in enumerate(request["cases"]):
-        assert set(blind_case) == {"id", "draft", "context", "candidates"}
+        assert set(blind_case) == {"id", "draft", "candidates"}
         assert blind_case["id"] == str(index)
         expected_mapping = dict(zip("ABC", permutations[index], strict=True))
         assert private["mapping"][str(index)] == expected_mapping

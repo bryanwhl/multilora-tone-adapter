@@ -1,18 +1,22 @@
 # multilora-tone-adapter
 
-Turn private Telegram exports into a local writing-style adapter. Codex prepares the content of a reply; a quantized Qwen 8B model with your Telegram LoRA adapter rewrites the draft in your voice.
+Turn private Telegram exports into a local writing-style adapter. Codex prepares the content of a reply; a quantized Qwen 8B model with your Telegram LoRA adapter receives **only that completed draft** and rewrites it in your voice. Conversation history never enters the local model's training or inference input.
 
 ```text
-Telegram JSON or HTML export → original reply + preceding history
-                              ↓ Codex labeler
-                    neutral draft → original reply
-                              ↓ local QLoRA
-                      Telegram style adapter
+Dataset curation:
+Telegram export → original reply + preceding history → Codex labeler
+                                                       ↓
+Training pair:                               neutral draft → original reply
+                                                       ↓ local QLoRA
+                                               Telegram style adapter
 
-Your request → Codex draft → local model + adapter → meaning check → returned draft
+Daily use:
+Your request + conversation → Codex → completed draft only
+                                      ↓ local model + adapter
+                                  styled draft → Codex meaning check → returned draft
 ```
 
-The first version supports one app and one task: **Telegram draft rewriting**. It does not retrieve live messages, send replies, or infer your intended answer from conversation history alone. Separate app adapters can be added later against the same pinned base.
+The first version supports one app and one task: **Telegram draft rewriting**. History helps the labeler understand authentic replies and helps Codex decide what to say; the style model transforms the supplied draft. It does not retrieve live messages or send replies. Separate app adapters can be added later against the same pinned base.
 
 ## Requirements
 
@@ -73,7 +77,7 @@ uv run multilora prepare /path/to/telegram/result.json --author-id user123456 \
 
 Secret-pattern and media-bearing messages are excluded before labeling. This conservative screen may remove usable examples and cannot detect every secret. The private import report records exclusion counts without message bodies.
 
-Codex reads the private request and schema paths returned by `labels-request`, generates neutral drafts with the same meaning as the authentic replies, and writes the structured response to a private file. Each label includes `id`, `draft`, `meaning_preserved`, and `reason`. Import and repeat until all selected episodes have labels:
+Codex reads the private request and schema paths returned by `labels-request`, generates neutral drafts with the same meaning as the authentic replies, and writes the structured response to a private file. Each label includes `id`, `draft`, `meaning_preserved`, and `reason`. History stays in curation records and split provenance. The dataset builder sends only the neutral draft to the trainable model and supervises the unchanged authentic reply. Import and repeat until all selected episodes have labels:
 
 ```bash
 uv run multilora labels-import --run telegram-pilot --input /private/path/labels.json
@@ -94,27 +98,31 @@ uv run multilora activate --run telegram-pilot
 uv run multilora serve --run telegram-pilot --port 8765
 ```
 
-See [evaluation inputs and judgment schema](docs/evaluation.md#cli-evaluation-contract). `activate` rejects unqualified or stale artifacts. `serve --candidate` is available only for an explicit unqualified smoke test; it does not activate the adapter.
+See [evaluation inputs and judgment schema](docs/evaluation.md#cli-evaluation-contract). Evaluation cases contain a draft and the independence flag, with no `context` field. `activate` rejects unqualified or stale artifacts. `serve --candidate` is available only for an explicit unqualified smoke test; it does not activate the adapter or bypass the draft-only input contract.
 
 A candidate smoke test is distinct from qualification. Successful model loading, one training step, or a successful HTTP response does not establish good personal style or faithful meaning preservation. See [evaluation](docs/evaluation.md).
 
+### Existing runs
+
+Datasets and adapters from the earlier context-capable workflow are incompatible with the draft-only contract. Preserve them as historical runs. Rebuild the dataset from retained episodes and labels in a new private run, then retrain and evaluate a new adapter. Do not edit old manifests to claim compatibility, remove context only at inference, or reuse an old qualification report. The runtime rejects legacy artifacts, including candidate serving. See [train and serve compatibility](docs/architecture.md#train-and-serve-contract).
+
 ## Daily use
 
-Ask Codex to help craft a Telegram reply. Codex first resolves the intended content and then calls the local service with that draft. The service returns a styled message; Codex checks that the result preserves the original intent before presenting it. You review and send the reply yourself.
+Ask Codex to help craft a Telegram reply. Codex uses the conversation to resolve the intended content and then calls the local service with only the completed reply draft. Do not append conversation history to the draft or pass a request for the local model to decide the answer. The service returns a styled message; Codex checks that the result preserves the original intent before presenting it. You review and send the reply yourself.
 
 Example request using entirely fictional text:
 
 ```bash
 curl http://127.0.0.1:8765/v1/rewrite \
   -H 'Content-Type: application/json' \
-  --data '{"task":"rewrite","profile":"telegram","draft":"Yes, I can join tomorrow.","context":[],"max_output_tokens":128}'
+  --data '{"task":"rewrite","profile":"telegram","draft":"Yes, I can join tomorrow.","max_output_tokens":128}'
 ```
 
 Alternatively, put the draft in a private text file and use `uv run multilora rewrite --draft-file /private/path/draft.txt`.
 
 The API binds to localhost by default. It serves one active generation and returns HTTP 429 if busy. Only the `rewrite` task and `telegram` profile are supported. The JSON response contains `output`, `adapter_version`, and `meaning_validation`; a successful heuristic check still requires Codex to review semantic meaning.
 
-`GET /health` reports service and model-load state without forcing a model load. `GET /openapi.json` provides the exact request and response schema; interactive `/docs` and `/redoc` pages are disabled. Requests allow a nonblank draft up to 8,000 characters, at most 8 context messages using `speaker` and `text`, and `max_output_tokens` from 1 to 512 (default 128).
+`GET /health` reports service and model-load state without forcing a model load. `GET /openapi.json` provides the exact request and response schema; interactive `/docs` and `/redoc` pages are disabled. Requests allow a nonblank draft up to 8,000 characters and `max_output_tokens` from 1 to 512 (default 128). Unknown fields, including `context` even when empty, are rejected with HTTP 422.
 
 ## Private data stays outside Git
 

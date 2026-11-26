@@ -8,20 +8,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .common import digest, read_jsonl, write_json
+from .common import digest, input_contract, read_jsonl, write_json
 from .labeling import validate_meaning
 
 
 def _artifact_binding(directory: Path) -> dict:
-    from .runtime import file_sha256, model_fingerprint
-    training = json.loads((directory / "adapter/training.json").read_text())
+    from .runtime import (
+        file_sha256,
+        model_fingerprint,
+        verify_adapter_contract,
+        verify_dataset_contract,
+    )
+    training = verify_adapter_contract(directory / "adapter")
     if training.get("status") != "succeeded":
         raise ValueError("Training has not succeeded")
     model_path = Path(json.loads((directory / "model.json").read_text())["path"])
     current_model = model_fingerprint(model_path)
     if current_model["fingerprint"] != training.get("model", {}).get("fingerprint"):
         raise ValueError("Base weights or tokenizer changed after training")
-    dataset = json.loads((directory / "dataset/manifest.json").read_text())
+    dataset = verify_dataset_contract(directory / "dataset")
     files = training.get("dataset_files", {})
     for name, expected in files.items():
         if file_sha256(directory / "dataset" / name) != expected:
@@ -32,7 +37,8 @@ def _artifact_binding(directory: Path) -> dict:
     config_hash = file_sha256(directory / "adapter/adapter_config.json")
     if config_hash != training.get("adapter_config_sha256"):
         raise ValueError("Adapter configuration changed after training")
-    return {"adapter_sha256": weight_hash, "training_sha256": file_sha256(directory / "adapter/training.json"),
+    return {"input_contract": input_contract(),
+            "adapter_sha256": weight_hash, "training_sha256": file_sha256(directory / "adapter/training.json"),
             "adapter_config_sha256": config_hash,
             "dataset_hash": dataset["dataset_hash"], "accepted_pairs": dataset["accepted_pairs"],
             "model": training["model"]}
@@ -60,18 +66,25 @@ def _run_variant(directory: Path, model: Path, mode: str, cases: list[dict],
     return outputs
 
 
-def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> dict:
-    binding = _artifact_binding(directory)
-    cases = json.loads(cases_file.read_text())
+def validate_cases(cases: object) -> None:
+    """Evaluation uses the same draft-only task; reject legacy context explicitly."""
     if not isinstance(cases, list) or not cases:
         raise ValueError("Cases must be a nonempty JSON array")
     for case in cases:
         if not isinstance(case, dict) or not isinstance(case.get("draft"), str) or not case["draft"].strip():
             raise ValueError("Every evaluation case needs a nonempty draft")
+        if set(case) != {"draft", "independently_authored"}:
+            raise ValueError("Evaluation cases allow only draft and independently_authored; remove context")
         if case.get("independently_authored") is not True:
             raise ValueError("Every case must declare independently_authored: true")
     if len({digest(c) for c in cases}) != len(cases):
         raise ValueError("Duplicate evaluation cases")
+
+
+def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> dict:
+    cases = json.loads(cases_file.read_text())
+    validate_cases(cases)
+    binding = _artifact_binding(directory)
     model = Path(json.loads((directory / "model.json").read_text())["path"])
     # Training-only style examples are available to the baseline and the judge.
     rows = read_jsonl(directory / "dataset/train.jsonl")[:8]
@@ -87,7 +100,7 @@ def generate_comparison(directory: Path, cases_file: Path, memory_gb=None) -> di
         candidates = {chr(65 + i): variants[mode][index] for i, mode in enumerate(order)}
         mapping[str(index)] = {chr(65 + i): mode for i, mode in enumerate(order)}
         blind_cases.append({"id": str(index), "draft": case["draft"],
-                            "context": case.get("context", []), "candidates": candidates})
+                            "candidates": candidates})
     payload = {"binding": binding, "cases": cases, "variants": variants, "mapping": mapping}
     write_json(directory / "comparison-private.json", payload)
     request = {

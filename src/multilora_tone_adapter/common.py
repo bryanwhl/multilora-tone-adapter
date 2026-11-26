@@ -58,9 +58,29 @@ def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def messages_for(draft: str, context: list[dict] | str | None = None, target: str | None = None) -> list[dict]:
+def input_contract() -> dict:
+    """Bind the exact production prompt and allowed model input fields."""
+    return {
+        "name": "draft-only-v1",
+        "sha256": digest({"version": 1, "system_prompt": SYSTEM_PROMPT, "user_fields": ["draft"]}),
+    }
+
+
+def require_input_contract(record: dict, artifact: str) -> None:
+    if record.get("input_contract") != input_contract():
+        raise ValueError(
+            f"{artifact} uses a missing or incompatible input contract; "
+            "rebuild a draft-only dataset in a new run and retrain the adapter."
+        )
+
+
+def messages_for(draft: str, *, target: str | None = None) -> list[dict]:
     """One identical serialization for training, evaluation and HTTP inference."""
-    payload = {"draft": draft, "context": context or []}
+    if not isinstance(draft, str) or not draft.strip():
+        raise ValueError("Draft must contain text.")
+    if target is not None and (not isinstance(target, str) or not target.strip()):
+        raise ValueError("Target must contain text.")
+    payload = {"draft": draft}
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},

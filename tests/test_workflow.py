@@ -6,7 +6,13 @@ import subprocess
 import pytest
 
 from multilora_tone_adapter.cli import main, run_dir
-from multilora_tone_adapter.common import digest, read_jsonl, write_json, write_jsonl
+from multilora_tone_adapter.common import (
+    digest,
+    input_contract,
+    read_jsonl,
+    write_json,
+    write_jsonl,
+)
 from multilora_tone_adapter.dataset import assign_splits
 from multilora_tone_adapter.evaluation import activate, verify_active
 from multilora_tone_adapter.labeling import import_labels, make_request, validate_meaning
@@ -157,13 +163,14 @@ def trained_fixture(directory):
         dataset / "train.jsonl", [{"messages": [{"role": "assistant", "content": "synthetic"}]}]
     )
     write_json(
-        dataset / "manifest.json", {"dataset_hash": "synthetic-dataset", "accepted_pairs": 500}
+        dataset / "manifest.json", {"dataset_hash": "synthetic-dataset", "accepted_pairs": 500, "input_contract": input_contract()}
     )
     write_json(directory / "model.json", {"path": str(model)})
     write_json(
         adapter / "training.json",
         {
             "status": "succeeded",
+            "input_contract": input_contract(),
             "adapter_sha256": file_sha256(adapter / "adapters.safetensors"),
             "adapter_config_sha256": file_sha256(adapter / "adapter_config.json"),
             "dataset_files": {"train.jsonl": file_sha256(dataset / "train.jsonl")},

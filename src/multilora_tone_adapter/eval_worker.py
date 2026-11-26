@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from .common import write_json
+from .evaluation import validate_cases
 from .runtime import MLXEngine, preflight
 
 
@@ -29,17 +30,17 @@ def generate(request: dict) -> list[str]:
     mode = request["mode"]
     if mode not in {"base", "prompt", "adapter"}:
         raise ValueError("Unsupported evaluation mode")
+    validate_cases(request["cases"])
+    options = {"memory_gb": request.get("memory_gb")}
+    if mode == "prompt":
+        options["evaluation_style_references"] = request["references"]
     engine = MLXEngine(Path(request["model_path"]),
                        Path(request["adapter_path"]) if mode == "adapter" else None,
-                       memory_gb=request.get("memory_gb"))
+                       **options)
     try:
         outputs = []
         for case in request["cases"]:
-            context = list(case.get("context", []))
-            if mode == "prompt":
-                context = [{"speaker": "style_reference", "text":
-                    "Examples of the desired author's style: " + json.dumps(request["references"], ensure_ascii=False)}] + context
-            outputs.append(engine.rewrite(case["draft"], context, max_output_tokens=128))
+            outputs.append(engine.rewrite(case["draft"], max_output_tokens=128))
         return outputs
     finally:
         engine.close()

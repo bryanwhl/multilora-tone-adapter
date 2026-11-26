@@ -9,7 +9,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .common import atomic_write, digest, messages_for, private_dir, write_json
+from .common import atomic_write, digest, input_contract, messages_for, private_dir, write_json
 from .labeling import validate_pair
 
 
@@ -145,7 +145,7 @@ def build_dataset(
             rejected["pair_screen_failed"] += 1
         else:
             split = splits[key]
-            rows[split].append({"messages": messages_for(draft, episode.get("context"), target)})
+            rows[split].append({"messages": messages_for(draft, target=target)})
             provenance.append(
                 {
                     "id": key,
@@ -170,7 +170,8 @@ def build_dataset(
         json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in provenance
     )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "input_contract": input_contract(),
         "profile": "telegram",
         "episodes": len(episodes),
         "accepted_pairs": accepted,

@@ -4,6 +4,8 @@ The checks below used fictional messages and synthetic fixtures. They verify tha
 
 ## Local validation on 23 November 2026
 
+This historical run predates the draft-only input contract and used the earlier context-capable workflow. Its datasets and adapters are not compatible with the current runtime. These observations do not validate the new contract or a newly trained adapter; rerun the portable checks and a separate local model evaluation for the current implementation.
+
 | Check | Result |
 | --- | --- |
 | Automated tests | 89 passed; one upstream Starlette test-client deprecation warning |
