@@ -38,6 +38,6 @@ Before returning the result, compare it with the input draft. Preserve names, nu
 
 ## Reporting
 
-Distinguish synthetic automated tests, real model smoke tests, and private-data qualification. State which actually ran, the usable episode count, the selected base revision, the active adapter state, and material failures. Report summaries without exposing private message bodies. Correctness takes priority over speed; measure duration and latency without claiming a performance target.
+Distinguish synthetic automated tests, real model smoke tests, and private-data qualification. State which actually ran, the usable episode count, the selected base revision, the active adapter state, and material failures. Report results to the user and save them in private state. Keep run-specific reports, identifiers, hashes, counts, metrics, timings, hardware observations, and output examples out of the public repository, even without message bodies. Public docs should provide reusable instructions and wholly synthetic examples, not individual run records. Correctness takes priority over speed; measure duration and latency without claiming a performance target.
 
 Before any source publication, inspect the staged file list and diff and run the publication audit. Never force-add ignored private artifacts. A clean scanner does not replace content inspection.

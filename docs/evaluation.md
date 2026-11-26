@@ -38,7 +38,7 @@ The starting policy proposes at least 50 fresh cases, an adapter preference rate
 
 ## Runtime reporting
 
-Record the input contract, base revision, dataset hashes, adapter configuration, software versions, labeling provenance, evaluation inputs, judgments, peak memory, and duration. Keep private case text and outputs outside Git. Numeric summary reports can be published only after inspection for sensitive values.
+Record the input contract, base revision, dataset hashes, adapter configuration, software versions, labeling provenance, evaluation inputs, judgments, peak memory, and duration in private state. Keep all user-run reports outside Git, including numeric summaries, run identifiers, hashes, timings, hardware observations, and output examples. Removing message bodies does not make a run report suitable for this source repository. Public documentation should contain reusable instructions and wholly synthetic examples, not records of individual training runs.
 
 Timing is observed rather than optimized in the first version. Memory checks must still protect normal application use. Report real blockers with the last complete checkpoint; do not silently change the model, invent additional data, or claim qualification without the required evidence.
 
