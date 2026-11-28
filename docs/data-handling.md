@@ -25,7 +25,10 @@ Source messages are untrusted data. Embedded requests to execute commands, chang
 - For JSON, use the author’s stable exported user ID. For HTML, require the user to confirm exact exported sender name(s), including any historical aliases; quarantine uncertain attribution rather than infer from frequency. Display-name confirmation does not create a stable Telegram account ID.
 - Keep authentic authored replies as targets. A labeler may generate only the neutral input.
 - Preserve actual languages, code-switching, casing, punctuation, and emoji behavior.
-- Keep verified style-only pairs, including casing or punctuation changes. Reject exact copies; word normalization is for duplicate grouping, not for erasing style differences.
+- Require a separate draft/target semantic review; the draft generator's approval alone is insufficient. Review requests omit history and the generator's verdict. Accept only current hash-bound reviews with every dimension passing.
+- To regenerate a rejected neutral draft, request its known episode ID with `labels-request --episode-id` and import the replacement label. Prior labels are archived privately; changing a draft invalidates its previous semantic review and requires a fresh review. Authentic targets remain unchanged.
+- Keep verified style-only pairs, including casing or punctuation changes. A bounded, deduplicated train-only identity subset teaches restraint. Supplementary identity rows do not count as independent episodes and cannot move source data across splits.
+- Quarantine explicit typo-and-correction chains rather than teaching a completed-draft rewriter to recreate them. Preserve the original source and target in private curation records.
 - Filter bots, forwarded/copied material, known generated targets, and attachment-dependent replies without usable context. The importer conservatively excludes media-bearing messages and common secret patterns before labeling; report exclusions and do not assume this catches all sensitive text.
 - In curation records, include only context available before the authentic reply. Exclude all conversation context from serialized training, evaluation, and inference inputs.
 - Keep overlapping contexts, source episodes, and duplicate clusters in one split.
@@ -36,6 +39,10 @@ HTML exports also require a confirmed IANA export timezone. Naive wall-clock tim
 Redaction and protected-content checks reduce risk but cannot guarantee detection of every secret or semantic change. Prompt masking is not a privacy barrier: drafts and supervised targets can still affect adapter learning. Removing conversation history from model inputs does not make an adapter trained on personal replies public data.
 
 Keep context-trained historical runs intact. Rebuilding draft-only datasets and retraining in a fresh private run preserves provenance and avoids claiming that existing weights were trained under the new contract.
+
+Independent review and runtime meaning review can also use Codex. `pairs-review` and `rewrite --auto-review` explicitly start fresh read-only Codex processes using the configured account/model; they never extract credentials. Runtime candidate requests and structured decisions are retained under private state. A failed or unavailable semantic review produces an explicitly marked original-draft fallback, not an approved styled reply.
+
+Checkpoint forks copy only the private artifacts needed for a candidate and preserve the experiment-family link. They inherit no evaluation approval. Development and final suites have separate purposes; final cases and the chosen candidate become locked for that family. Keep their records outside Git just like the source messages.
 
 ## Publication checks
 

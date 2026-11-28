@@ -8,6 +8,67 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import contextmanager
+from functools import wraps
+
+from .common import digest
+
+
+def training_objective_contract() -> dict:
+    """Version the objective independently of the draft serialization contract."""
+    definition = {
+        "version": 1,
+        "target_positions": "prompt_offset <= original_token_index < sequence_length",
+        "reduction": "mean_cross_entropy_over_unmasked_target_tokens",
+        "includes_real_eos": True,
+        "includes_padding": False,
+    }
+    return {"name": "assistant-target-no-padding-v1", "sha256": digest(definition)}
+
+
+def target_token_mask(positions, offsets, lengths):
+    """Positions are original token indices after the next-token target shift."""
+    return (positions >= offsets) & (positions < lengths)
+
+
+def assistant_target_loss(model, batch, lengths):
+    """Score actual assistant tokens, including EOS, without scoring any padding."""
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    inputs, targets = batch[:, :-1], batch[:, 1:]
+    logits = model(inputs)
+    positions = mx.arange(1, targets.shape[1] + 1)
+    mask = target_token_mask(positions, lengths[:, 0:1], lengths[:, 1:])
+    losses = nn.losses.cross_entropy(logits, targets)
+    count = mask.sum()
+    return (losses * mask).astype(mx.float32).sum() / count, count
+
+
+@contextmanager
+def corrected_objective(lora_module):
+    """Inject an explicit loss into this worker's upstream entry points only.
+
+    MLX train forwards its loss callable to validation. Its separate evaluate
+    entry point is wrapped too, so --test uses the same objective. No installed
+    files or function defaults are modified.
+    """
+    original = {name: getattr(lora_module, name) for name in ("train", "evaluate")}
+
+    def bind(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            kwargs["loss"] = assistant_target_loss
+            return function(*args, **kwargs)
+        return wrapped
+
+    try:
+        for name, function in original.items():
+            setattr(lora_module, name, bind(function))
+        yield
+    finally:
+        for name, function in original.items():
+            setattr(lora_module, name, function)
 
 
 def cache_limit_bytes(memory_budget_bytes: int) -> int:
@@ -53,7 +114,8 @@ def main(argv: list[str] | None = None) -> None:
     original_argv = sys.argv
     try:
         sys.argv = ["mlx_lm.lora", *upstream_args]
-        lora_main()
+        with corrected_objective(sys.modules["mlx_lm.lora"]):
+            lora_main()
     finally:
         sys.argv = original_argv
 

@@ -6,6 +6,8 @@ Turn private Telegram exports into a local writing-style adapter. Codex prepares
 Dataset curation:
 Telegram export → original reply + preceding history → Codex labeler
                                                        ↓
+Independent pair review:                     neutral draft ↔ original reply
+                                                       ↓ accept or quarantine
 Training pair:                               neutral draft → original reply
                                                        ↓ local QLoRA
                                                Telegram style adapter
@@ -13,7 +15,9 @@ Training pair:                               neutral draft → original reply
 Daily use:
 Your request + conversation → Codex → completed draft only
                                       ↓ local model + adapter
-                                  styled draft → Codex meaning check → returned draft
+                                  candidate → structured Codex meaning review
+                                                ↓ pass          ↓ fail/uncertain
+                                           styled reply       original draft
 ```
 
 The first version supports one app and one task: **Telegram draft rewriting**. History helps the labeler understand authentic replies and helps Codex decide what to say; the style model transforms the supplied draft. It does not retrieve live messages or send replies. Separate app adapters can be added later against the same pinned base.
@@ -81,48 +85,74 @@ Codex reads the private request and schema paths returned by `labels-request`, g
 
 ```bash
 uv run multilora labels-import --run telegram-pilot --input /private/path/labels.json
+uv run multilora pairs-review-request --run telegram-pilot --limit 25
+# A fresh reviewer reads only the returned draft/target request, then writes reviews.json.
+uv run multilora pairs-review-import --run telegram-pilot --input /private/path/reviews.json
 uv run multilora build --run telegram-pilot
 uv run multilora download-model
-uv run multilora train --run telegram-pilot
+uv run multilora train --run telegram-pilot --epochs 2 --max-seq-length 1280
 ```
 
 For explicit unattended labeling through the installed Codex CLI, `uv run multilora label --run telegram-pilot` uses the user's existing configuration. For example: `uv run multilora label --run telegram-pilot --batch-size 25 --max-batches 100`. Optional `--model MODEL` changes the Codex model; the batch flags bound work. The current CLI supports Codex model overrides, not an arbitrary hosted-provider API. This mode starts separate ephemeral Codex runs and remains subject to account limits. The invoking-agent batch workflow above is the default. Malformed responses receive at most two fresh retries against the unchanged batch; source changes and process failures stop immediately. Exact response IDs are validated rather than repaired.
 
+Pair review is a separate stage: `uv run multilora pairs-review --run telegram-pilot` invokes fresh Codex review processes using the existing configuration. The reviewer receives only each draft and authentic target, without conversation history or the generator's self-assessment. Every semantic dimension must pass; changed, unreviewed, failed, or uncertain pairs cannot enter the rewrite dataset. Keep targets unchanged; regenerate a mismatched draft with `labels-request --episode-id ID` or quarantine it. Changed drafts require a fresh review. Explicit typo/correction chains are quarantined. A bounded, deduplicated set of train-only identity examples teaches already-suitable drafts to remain unchanged; these extra rows do not count toward the independent-episode floor. `build --identity-fraction` controls this addition.
+
+Training uses a corrected loss mask for both training and validation: only real assistant target tokens contribute, including the actual end token, never padding. All validation rows are measured. Intermediate checkpoints are saved every quarter of the run by default; `--save-every` changes the interval. Choose `--max-seq-length` to fit complete examples within the measured memory budget; exceeding it is an error, not silent truncation.
+
 Evaluate on independently prepared drafts against the same base with and without a style prompt. Each case must declare `independently_authored: true`; this is a provenance assertion, not automatic verification. The evaluation command writes a private blind comparison request. Codex judges that request, then imports the judgments before activation:
 
 ```bash
-uv run multilora evaluate --run telegram-pilot --cases /private/path/cases.json
+uv run multilora evaluate --run telegram-pilot --purpose development --cases /private/path/dev-cases.json
 # Codex reads the returned request_file and writes private judgments.json.
 uv run multilora evaluate-import --run telegram-pilot --input /private/path/judgments.json
+```
+
+Use `checkpoint-fork --run telegram-pilot --step STEP --new-run CANDIDATE` with a step from the private training inventory to evaluate an earlier checkpoint in a fresh private run. All sibling candidates share a fixed development suite. Rank their imported development results with `checkpoint-rank --runs CANDIDATE_A CANDIDATE_B`; meaning preservation takes precedence over style. Then select one candidate and evaluate untouched final cases:
+
+```bash
+uv run multilora checkpoint-select --run telegram-pilot
+uv run multilora evaluate --run telegram-pilot --purpose qualification --cases /private/path/final-cases.json
+uv run multilora evaluate-import --run telegram-pilot --input /private/path/final-judgments.json
 uv run multilora activate --run telegram-pilot
 uv run multilora serve --run telegram-pilot --port 8765
 ```
 
-See [evaluation inputs and judgment schema](docs/evaluation.md#cli-evaluation-contract). Evaluation cases contain a draft and the independence flag, with no `context` field. `activate` rejects unqualified or stale artifacts. `serve --candidate` is available only for an explicit unqualified smoke test; it does not activate the adapter or bypass the draft-only input contract.
+See [evaluation inputs, category coverage and judgment schema](docs/evaluation.md). Case categories describe coverage and never enter the model input. Choose `--language-scope multilingual` when qualifying mixed-language use; English-only qualification does not establish multilingual quality; runtime review falls back for drafts outside that scope. Final cases must be disjoint from development drafts. Starting final evaluation locks the experiment family against further checkpoint tuning on those cases. `activate` rejects development-only, unqualified or stale artifacts. `serve --candidate` is only an explicit unqualified smoke test.
 
 A candidate smoke test is distinct from qualification. Successful model loading, one training step, or a successful HTTP response does not establish good personal style or faithful meaning preservation. See [evaluation](docs/evaluation.md).
 
 ### Existing runs
 
-Datasets and adapters from the earlier context-capable workflow are incompatible with the draft-only contract. Preserve them as historical runs. Rebuild the dataset from retained episodes and labels in a new private run, then retrain and evaluate a new adapter. Do not edit old manifests to claim compatibility, remove context only at inference, or reuse an old qualification report. The runtime rejects legacy artifacts, including candidate serving. See [train and serve compatibility](docs/architecture.md#train-and-serve-contract).
+Preserve historical runs. Older datasets without independent pair reviews must be reviewed and rebuilt in a new private run; older training objectives and evaluation reports cannot qualify a new adapter. Context-trained adapters also remain incompatible with draft-only inference. Never edit old manifests to claim compatibility or reuse an old qualification report. See [train and serve compatibility](docs/architecture.md#train-and-serve-contract).
 
 ## Daily use
 
-Ask Codex to help craft a Telegram reply. Codex uses the conversation to resolve the intended content and then calls the local service with only the completed reply draft. Do not append conversation history to the draft or pass a request for the local model to decide the answer. The service returns a styled message; Codex checks that the result preserves the original intent before presenting it. You review and send the reply yourself.
+Ask Codex to help craft a Telegram reply. Codex resolves the intended content and sends only the completed draft to the local model. Do not append history or ask the style model to decide the answer. Put the draft in a private file, then request a candidate for structured review:
+
+```bash
+uv run multilora rewrite --draft-file /private/path/draft.txt
+# Codex reads the returned request_file, checks every semantic dimension,
+# and writes the exact response schema to a private file.
+uv run multilora rewrite-import --request /private/path/request.json --input /private/path/review.json
+```
+
+The final result contains `output`, `status`, `reason`, `adapter_version`, and `meaning_validation`. Only a complete passing review releases `status: rewritten`. A failed, uncertain or unavailable review returns the exact original draft with `status: fallback_original`. Requests and reviews are bound to the draft, candidate, and adapter version; a review for another candidate cannot be reused. No unchanged greedy retry is attempted. You review and send the message yourself.
+
+For an explicit separate Codex process, use `rewrite --draft-file /private/path/draft.txt --auto-review`; optional `--model MODEL` changes that reviewer. This opt-in may send the draft and candidate to the configured Codex service. Without `--auto-review`, the invoking agent performs the review; the local API does not silently call a hosted model.
 
 Example request using entirely fictional text:
 
 ```bash
-curl http://127.0.0.1:8765/v1/rewrite \
+curl http://127.0.0.1:8765/v1/rewrite/candidate \
   -H 'Content-Type: application/json' \
   --data '{"task":"rewrite","profile":"telegram","draft":"Yes, I can join tomorrow.","max_output_tokens":128}'
 ```
 
-Alternatively, put the draft in a private text file and use `uv run multilora rewrite --draft-file /private/path/draft.txt`.
+The candidate endpoint returns `candidate`, `request_hash`, and `status: requires_semantic_review`, never a final `output`. Do not present a candidate as approved. The final `/v1/rewrite` endpoint returns the original draft when no semantic reviewer is configured; embedders can provide a reviewer callable to `create_app`. Even a configured reviewer cannot override a failed protected-content screen.
 
-The API binds to localhost by default. It serves one active generation and returns HTTP 429 if busy. Only the `rewrite` task and `telegram` profile are supported. The JSON response contains `output`, `adapter_version`, and `meaning_validation`; a successful heuristic check still requires Codex to review semantic meaning.
+The API binds to localhost by default. It serves one active generation and returns HTTP 429 if busy. Only the `rewrite` task and `telegram` profile are supported. Semantic judgments are model-assisted checks, not a guarantee of correctness.
 
-`GET /health` reports service and model-load state without forcing a model load. `GET /openapi.json` provides the exact request and response schema; interactive `/docs` and `/redoc` pages are disabled. Requests allow a nonblank draft up to 8,000 characters and `max_output_tokens` from 1 to 512 (default 128). Unknown fields, including `context` even when empty, are rejected with HTTP 422.
+`GET /health` reports service and model-load state without forcing a model load. `GET /openapi.json` provides the exact request and response schema; interactive `/docs` and `/redoc` pages are disabled. Requests allow a nonblank draft up to 8,000 characters and `max_output_tokens` from 1 to 512 (default 512). Unknown fields, including `context` even when empty, are rejected with HTTP 422.
 
 ## Private data stays outside Git
 

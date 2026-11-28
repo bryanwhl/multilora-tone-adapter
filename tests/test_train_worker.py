@@ -8,9 +8,9 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from checkpoint_fixtures import curated_dataset
 
 from multilora_tone_adapter import runtime, train_worker
-from multilora_tone_adapter.common import input_contract, write_json
 
 
 @pytest.fixture
@@ -23,6 +23,8 @@ def fake_mlx(monkeypatch):
     mlx.__path__ = []
     mlx.core = core
     lora = ModuleType("mlx_lm.lora")
+    lora.train = lambda *args, **kwargs: None
+    lora.evaluate = lambda *args, **kwargs: None
     lora.main = lambda: events.append(("main", list(sys.argv)))
     package = ModuleType("mlx_lm")
     package.__path__ = []
@@ -145,8 +147,7 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
     data, model, adapter = (tmp_path / name for name in ("data", "model", "adapter"))
     data.mkdir()
     model.mkdir()
-    (data / "train.jsonl").write_text("{}\n")
-    write_json(data / "manifest.json", {"input_contract": input_contract()})
+    curated_dataset(data)
     budget = {
         "budget_bytes": 7 * runtime.GIB,
         "reserve_bytes": 3 * runtime.GIB,
@@ -186,12 +187,14 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
             script = (
                 "from pathlib import Path; "
                 "Path('adapters.safetensors').write_bytes(b'synthetic-adapter'); "
+                "Path('0000001_adapters.safetensors').write_bytes(b'synthetic-checkpoint'); "
                 "Path('adapter_config.json').write_text('{}')"
             )
             with real_popen([sys.executable, "-c", script], **kwargs) as permission_child:
                 assert permission_child.wait(timeout=10) == 0
         else:
             (adapter / "adapters.safetensors").write_bytes(b"synthetic-adapter")
+            (adapter / "0000001_adapters.safetensors").write_bytes(b"synthetic-checkpoint")
             (adapter / "adapter_config.json").write_text("{}")
         return child
 
@@ -209,6 +212,8 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
         "--",
     ]
     assert "--mask-prompt" in command and "--grad-checkpoint" in command
+    assert command[command.index("--save-every") + 1] == "1"
+    assert command[command.index("--val-batches") + 1] == "-1"
     assert help_check.call_args.args[0] == [sys.executable, "-m", "mlx_lm.lora", "--help"]
     supervise.assert_called_once_with(child, budget)
     assert kwargs["env"]["HF_HUB_OFFLINE"] == "1"
@@ -225,5 +230,124 @@ def test_parent_wires_budget_worker_metadata_without_changing_upstream_help_or_g
         "memory_limit_advisory": True,
     }
     assert result["status"] == "succeeded" and result["qualified"] is False
+    assert result["training_objective"] == train_worker.training_objective_contract()
+    assert [row["step"] for row in result["checkpoints"]] == [1, 2]
     assert json.loads((adapter / "training.json").read_text())["worker"] == result["worker"]
     assert kwargs["cwd"] == Path(adapter)
+
+
+@pytest.mark.parametrize(
+    "offset,length,padded_length,expected",
+    [(3, 5, 33, [3, 4]), (2, 3, 513, [2]), (1, 2, 2, [1]), (0, 4, 8, [1, 2, 3])],
+)
+def test_target_mask_excludes_padding_and_keeps_final_real_token(
+    offset, length, padded_length, expected
+):
+    # Includes a one-token assistant target and padding much longer than the reply.
+    positions = [
+        position for position in range(1, padded_length)
+        if train_worker.target_token_mask(position, offset, length)
+    ]
+    assert positions == expected
+
+
+def test_objective_injected_for_training_and_validation_without_persistent_mutation(fake_mlx):
+    _, lora = fake_mlx
+    calls = []
+
+    def evaluate(*args, **kwargs):
+        calls.append(("evaluate", kwargs["loss"]))
+
+    def train(*args, **kwargs):
+        calls.append(("train", kwargs["loss"]))
+        # This is the upstream training contract: forward loss into validation.
+        evaluate(loss=kwargs["loss"])
+
+    lora.train, lora.evaluate = train, evaluate
+    with train_worker.corrected_objective(lora):
+        lora.train()
+        lora.evaluate()
+    assert calls == [
+        ("train", train_worker.assistant_target_loss),
+        ("evaluate", train_worker.assistant_target_loss),
+        ("evaluate", train_worker.assistant_target_loss),
+    ]
+    assert lora.train is train and lora.evaluate is evaluate
+
+
+def test_actual_mlx_loss_and_gradients_ignore_padding_and_prompt():
+    mx = pytest.importorskip("mlx.core")
+    nn = pytest.importorskip("mlx.nn")
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.logits = mx.zeros((2, 32, 7))
+
+        def __call__(self, inputs):
+            return self.logits[:, :inputs.shape[1], :]
+
+    model = TinyModel()
+    # Genuine EOS uses token 6. Row 2 has exactly one target token (EOS).
+    batch = mx.array([[1, 2, 3, 4, 6] + [0] * 28, [1, 2, 6] + [0] * 30])
+    lengths = mx.array([[3, 5], [2, 3]])
+    (loss, count), gradients = nn.value_and_grad(model, train_worker.assistant_target_loss)(
+        model, batch, lengths
+    )
+    mx.eval(loss, count, gradients)
+    assert count.item() == 3
+    assert loss.item() == pytest.approx(1.945910, abs=1e-5)
+    nonzero = (mx.abs(gradients["logits"]).sum(axis=-1) > 0).tolist()
+    assert [[i for i, flag in enumerate(row) if flag] for row in nonzero] == [[2, 3], [1]]
+    # Poison only prompt/padded predictions; the objective must remain identical.
+    changed = mx.array(model.logits)
+    changed[0, :2, 0] = 100
+    changed[0, 4:, 0] = 100
+    changed[1, :1, 0] = 100
+    changed[1, 2:, 0] = 100
+    model.logits = changed
+    second_loss, second_count = train_worker.assistant_target_loss(model, batch, lengths)
+    assert second_loss.item() == pytest.approx(loss.item(), abs=1e-6)
+    assert second_count.item() == 3
+
+
+def test_actual_upstream_training_and_validation_use_corrected_objective(monkeypatch, tmp_path):
+    mx = pytest.importorskip("mlx.core")
+    nn = pytest.importorskip("mlx.nn")
+    optim = pytest.importorskip("mlx.optimizers")
+    lora = pytest.importorskip("mlx_lm.lora")
+    trainer = pytest.importorskip("mlx_lm.tuner.trainer")
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = nn.Embedding(7, 4)
+            self.projection = nn.Linear(4, 7)
+
+        def __call__(self, inputs):
+            return self.projection(self.embedding(inputs))
+
+    calls = []
+    actual_loss = train_worker.assistant_target_loss
+
+    def observed_loss(model, batch, lengths):
+        calls.append(model.training)
+        return actual_loss(model, batch, lengths)
+
+    monkeypatch.setattr(train_worker, "assistant_target_loss", observed_loss)
+    dataset = [([1, 2, 6], 2)]  # One genuine assistant token (EOS).
+    args = trainer.TrainingArgs(
+        iters=1, batch_size=1, val_batches=-1, steps_per_eval=1,
+        steps_per_report=1, steps_per_save=1, max_seq_length=64,
+        adapter_file=tmp_path / "adapters.safetensors",
+    )
+    model = TinyModel()
+    mx.eval(model.parameters())
+    with train_worker.corrected_objective(lora):
+        lora.train(model=model, optimizer=optim.SGD(learning_rate=0.0),
+                   train_dataset=dataset, val_dataset=dataset, args=args)
+        result = lora.evaluate(model=model, dataset=dataset, batch_size=1,
+                               num_batches=-1, max_seq_length=64)
+    assert True in calls and calls.count(False) >= 2
+    assert result >= 0
+    assert (tmp_path / "adapters.safetensors").is_file()
