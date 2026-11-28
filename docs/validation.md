@@ -12,7 +12,9 @@ uv run ruff check .
 uv run pytest
 ```
 
-The suite uses fictional messages, synthetic fixtures, and fake inference engines. It covers parsing, identity and timezone requirements, grouped splits, draft-only serialization, API validation, resource guards, artifact compatibility, and qualification failures. It does not load a language model or establish personal style quality.
+The suite uses fictional messages, synthetic fixtures, and fake inference engines. It covers independent pair-review binding, identity-row limits, correction-chain quarantine, grouped splits, draft-only serialization, semantic review/fallback, checkpoint integrity, development/final separation, resource guards, artifact compatibility, and qualification failures. It does not load a pretrained language model or establish personal style quality.
+
+When MLX is installed, additional tiny-model tests exercise the actual loss and gradients plus upstream training and validation entrypoints. They verify that prompt/padding positions receive no loss or gradient while real assistant tokens and the end token remain supervised. These tests skip on machines without MLX; they do not download or train the base model.
 
 ## Local model smoke test
 
@@ -28,8 +30,10 @@ Use a separate private run with wholly fictional data to exercise model loading,
 Check that:
 
 - Training and inference use the same draft-only input contract and reject incompatible artifacts.
-- Token and prompt-masking checks pass without truncating required content.
-- A valid draft-only HTTP request reaches the candidate adapter; a `context` field is rejected, including when empty.
+- Independent reviews are required before building; approved identity examples stay in their source training split and do not inflate the independent-episode count.
+- Token and loss-masking checks pass without truncating required content; expected intermediate checkpoints are saved and recorded.
+- A valid draft-only `/v1/rewrite/candidate` request reaches the candidate adapter; a `context` field is rejected, including when empty.
+- The candidate is not final output. A valid structured review releases a styled reply; failure, uncertainty, missing review, or reviewer failure returns an explicitly marked original draft.
 - The resource guard preserves the configured application headroom and reports a failure if it cannot.
 - An unqualified candidate cannot be activated. `serve --candidate` is for an explicit smoke test only.
 
@@ -43,6 +47,6 @@ Portable regressions cover worker cleanup, unchanged inputs, transient and persi
 
 ## Private adapter qualification
 
-Evaluate a completed adapter on fresh, independently prepared drafts using the [evaluation protocol](evaluation.md). Report style preference and meaning preservation separately. The qualification gate binds judgments to the dataset, input contract, base model, and adapter; a stale report cannot qualify changed artifacts.
+Compare checkpoints on one fixed development suite using the [evaluation protocol](evaluation.md). Rank by meaning preservation before style and select one candidate before starting the disjoint final suite. Cover actors, uncertainty, negation, conditional commitments, protected values, longer drafts, and already-suitable wording; multilingual scope adds language coverage. Report usable style preference and meaning preservation separately. The qualification gate binds judgments to the curated dataset, corrected objective, input contract, base model, and exact checkpoint; a stale or development report cannot qualify changed artifacts.
 
 Store run-specific results in private state. The public repository contains reusable validation instructions and wholly synthetic tests, not individual training-run reports, hardware measurements, or personal output examples. See [data handling](data-handling.md) for the publication boundary.

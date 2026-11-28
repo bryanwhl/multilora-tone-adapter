@@ -4,7 +4,7 @@ import copy
 import json
 
 import pytest
-from test_dataset import independent_episodes, labels_for
+from test_dataset import independent_episodes, labels_for, synthetic_reviews_for
 from test_runtime import Tokenizer, fake_generation, fake_mlx_dataset  # noqa: F401
 from test_workflow import trained_fixture
 
@@ -30,8 +30,9 @@ def test_history_remains_for_curation_but_never_enters_training_messages(tmp_pat
     make_request(tmp_path)
     assert "CURATION_ONLY_SENTINEL" in (tmp_path / "label-request.json").read_text()
     output = tmp_path / "dataset"
-    manifest = build_dataset(episodes, labels, output, min_episodes=10)
-    assert manifest["schema_version"] == 2
+    manifest = build_dataset(episodes, labels, output, min_episodes=10,
+                             reviews=synthetic_reviews_for(episodes, labels), identity_fraction=0)
+    assert manifest["schema_version"] == 3
     assert manifest["input_contract"] == input_contract()
     assert episodes == original
     by_id = {episode["id"]: episode for episode in episodes}
@@ -149,7 +150,9 @@ def test_prompt_baseline_references_cannot_be_combined_with_adapter():
 
 def test_prompt_baseline_keeps_draft_payload_and_uses_fixed_system_references(monkeypatch):
     engine, _ = fake_generation(monkeypatch)
-    engine._evaluation_style_references = ["hello!", "thanks"]
+    references = [{"draft": "Hello.", "target": "hello!"},
+                  {"draft": "Thank you.", "target": "thanks"}]
+    engine._evaluation_style_references = references
     seen = []
 
     class RecordingTokenizer(Tokenizer):
@@ -160,7 +163,7 @@ def test_prompt_baseline_keeps_draft_payload_and_uses_fixed_system_references(mo
     engine._tokenizer = RecordingTokenizer()
     engine.rewrite("Draft")
     assert seen[0][1:] == messages_for("Draft")[1:]
-    assert json.dumps(["hello!", "thanks"]) in seen[0][0]["content"]
+    assert json.dumps(references) in seen[0][0]["content"]
 
 
 def test_current_adapter_cannot_bind_a_legacy_dataset(tmp_path):
@@ -181,7 +184,8 @@ def test_current_artifacts_cannot_reuse_legacy_evaluation_bindings(tmp_path, sta
     binding = evaluation._artifact_binding(tmp_path)
     old_binding = {key: value for key, value in binding.items() if key != "input_contract"}
     if stage == "comparison":
-        write_json(tmp_path / "comparison-private.json", {"binding": old_binding})
+        write_json(tmp_path / "comparison-private.json",
+                   {"protocol": evaluation.EVALUATION_PROTOCOL, "binding": old_binding})
         with pytest.raises(ValueError, match="Compared artifacts have changed"):
             evaluation.import_evaluation(tmp_path, tmp_path / "not-read.json")
     elif stage == "evaluation":

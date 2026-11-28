@@ -34,13 +34,14 @@ def generate(request: dict) -> list[str]:
     options = {"memory_gb": request.get("memory_gb")}
     if mode == "prompt":
         options["evaluation_style_references"] = request["references"]
+        options["evaluation_style_rubric"] = request.get("style_rubric")
     engine = MLXEngine(Path(request["model_path"]),
                        Path(request["adapter_path"]) if mode == "adapter" else None,
                        **options)
     try:
         outputs = []
         for case in request["cases"]:
-            outputs.append(engine.rewrite(case["draft"], max_output_tokens=128))
+            outputs.append(engine.rewrite(case["draft"], max_output_tokens=512))
         return outputs
     finally:
         engine.close()

@@ -4,7 +4,7 @@ import itertools
 import json
 
 from multilora_tone_adapter import evaluation
-from multilora_tone_adapter.common import digest, write_json, write_jsonl
+from multilora_tone_adapter.common import digest, messages_for, write_json, write_jsonl
 
 
 def test_per_case_shuffle_controls_letters_and_only_private_mapping_identifies_variants(
@@ -20,16 +20,17 @@ def test_per_case_shuffle_controls_letters_and_only_private_mapping_identifies_v
     write_json(tmp_path / "model.json", {"path": "synthetic-model"})
     write_jsonl(
         tmp_path / "dataset/train.jsonl",
-        [{"messages": [{"role": "assistant", "content": "Synthetic style reference"}]}],
+        [{"messages": messages_for("Synthetic reference draft", target="Synthetic style reference")}],
     )
     binding = {"synthetic_binding": True}
     monkeypatch.setattr(evaluation, "_artifact_binding", lambda _: binding)
+    monkeypatch.setattr(evaluation, "_fit_style_examples", lambda model, cases, references: (references, {}))
     generated_modes = []
 
     def run_variant(directory, model, mode, worker_cases, references, memory_gb):
         generated_modes.append(mode)
         assert worker_cases == cases
-        assert references == ["Synthetic style reference"]
+        assert references == [{"draft": "Synthetic reference draft", "target": "Synthetic style reference"}]
         return [f"{mode}-synthetic-result-{index}" for index in range(len(cases))]
 
     monkeypatch.setattr(evaluation, "_run_variant", run_variant)
@@ -60,6 +61,7 @@ def test_per_case_shuffle_controls_letters_and_only_private_mapping_identifies_v
     assert set(request) == {
         "comparison_hash",
         "style_references_train_only",
+        "style_rubric",
         "instructions",
         "cases",
     }

@@ -4,6 +4,8 @@ import json
 import subprocess
 
 import pytest
+from test_dataset import synthetic_reviews_for
+from test_evaluation_quality import covered_cases, import_judgments, run_comparison
 
 from multilora_tone_adapter.cli import main, run_dir
 from multilora_tone_adapter.common import (
@@ -13,11 +15,15 @@ from multilora_tone_adapter.common import (
     write_json,
     write_jsonl,
 )
-from multilora_tone_adapter.dataset import assign_splits
+from multilora_tone_adapter.dataset import assign_splits, build_dataset
 from multilora_tone_adapter.evaluation import activate, verify_active
 from multilora_tone_adapter.labeling import import_labels, make_request, validate_meaning
 from multilora_tone_adapter.publication import audit
-from multilora_tone_adapter.runtime import file_sha256, model_fingerprint
+from multilora_tone_adapter.runtime import (
+    file_sha256,
+    model_fingerprint,
+    training_objective_contract,
+)
 
 
 def write_episodes(directory):
@@ -148,7 +154,7 @@ def test_obvious_protected_value_changes_are_not_qualified(draft, changed):
     assert validate_meaning(draft, changed)
 
 
-def trained_fixture(directory):
+def trained_fixture(directory, accepted=500):
     model = directory / "fake-model"
     model.mkdir(parents=True)
     (model / "config.json").write_text("{}")
@@ -158,27 +164,50 @@ def trained_fixture(directory):
     write_json(adapter / "adapter_config.json", {"lora_parameters": {"rank": 8}})
     (adapter / "adapters.safetensors").write_bytes(b"synthetic-adapter-not-real-weights")
     dataset = directory / "dataset"
-    dataset.mkdir()
-    write_jsonl(
-        dataset / "train.jsonl", [{"messages": [{"role": "assistant", "content": "synthetic"}]}]
-    )
-    write_json(
-        dataset / "manifest.json", {"dataset_hash": "synthetic-dataset", "accepted_pairs": 500, "input_contract": input_contract()}
-    )
+    episodes = [
+        {"id": str(index), "context": [], "target": f"item {index} works!",
+         "group_id": f"synthetic-session-{index}", "source_ids": [f"synthetic-source-{index}"],
+         "timestamp": f"{index:06d}"}
+        for index in range(accepted)
+    ]
+    labels = [{"id": str(index), "draft": f"Item {index} is suitable.", "meaning_preserved": True}
+              for index in range(accepted)]
+    build_dataset(episodes, labels, dataset, min_episodes=1, identity_fraction=0,
+                  reviews=synthetic_reviews_for(episodes, labels))
     write_json(directory / "model.json", {"path": str(model)})
     write_json(
         adapter / "training.json",
         {
             "status": "succeeded",
             "input_contract": input_contract(),
+            "training_objective": training_objective_contract(),
+            "evaluation_family_root": str(directory.resolve()),
             "adapter_sha256": file_sha256(adapter / "adapters.safetensors"),
             "adapter_config_sha256": file_sha256(adapter / "adapter_config.json"),
-            "dataset_files": {"train.jsonl": file_sha256(dataset / "train.jsonl")},
+            "dataset_files": {path.name: file_sha256(path) for path in dataset.iterdir()
+                              if path.suffix in {".json", ".jsonl"}},
             "model": model_fingerprint(model),
             "model_path": str(model),
         },
     )
     return model
+
+
+def qualify_synthetic(directory, monkeypatch):
+    from multilora_tone_adapter import evaluation
+
+    monkeypatch.setattr(evaluation, "_run_variant",
+                        lambda directory, model, mode, cases, references, memory_gb:
+                        [case["draft"] for case in cases])
+    monkeypatch.setattr(evaluation, "_fit_style_examples",
+                        lambda model, cases, references: (references, {}))
+    comparison, judgments = run_comparison(directory, covered_cases())
+    import_judgments(directory, comparison, judgments)
+    evaluation.select_candidate(directory)
+    comparison, judgments = run_comparison(directory, covered_cases("Final"), purpose="qualification")
+    report = import_judgments(directory, comparison, judgments)
+    assert report["qualified"]
+    return report
 
 
 def test_failed_and_unqualified_training_cannot_activate(tmp_path):
@@ -195,13 +224,9 @@ def test_failed_and_unqualified_training_cannot_activate(tmp_path):
     assert not (tmp_path / "active.json").exists()
 
 
-def test_altered_base_cannot_retain_qualification(tmp_path):
-    from multilora_tone_adapter.evaluation import _artifact_binding
-
+def test_altered_base_cannot_retain_qualification(tmp_path, monkeypatch):
     model = trained_fixture(tmp_path)
-    write_json(
-        tmp_path / "evaluation.json", {"qualified": True, "binding": _artifact_binding(tmp_path)}
-    )
+    qualify_synthetic(tmp_path, monkeypatch)
     activate(tmp_path)
     verify_active(tmp_path)
     (model / "model.safetensors").write_bytes(b"changed-base-model")
@@ -270,12 +295,9 @@ def test_cli_errors_do_not_echo_message_payloads(tmp_path, monkeypatch, capsys):
     ],
 )
 def test_real_qualification_gates(tmp_path, monkeypatch, count, accepted, change_number, qualified):
-    from multilora_tone_adapter.evaluation import generate_comparison, import_evaluation
+    from multilora_tone_adapter.evaluation import select_candidate
 
-    trained_fixture(tmp_path)
-    manifest = json.loads((tmp_path / "dataset/manifest.json").read_text())
-    manifest["accepted_pairs"] = accepted
-    write_json(tmp_path / "dataset/manifest.json", manifest)
+    trained_fixture(tmp_path, accepted=accepted)
 
     def synthetic_variant(directory, model, mode, cases, references, memory_gb):
         return [
@@ -286,26 +308,20 @@ def test_real_qualification_gates(tmp_path, monkeypatch, count, accepted, change
         ]
 
     monkeypatch.setattr("multilora_tone_adapter.evaluation._run_variant", synthetic_variant)
-    cases = [
-        {"draft": f"Case {i}: send 12 units", "independently_authored": True} for i in range(count)
-    ]
-    write_json(tmp_path / "cases.json", cases)
-    result = generate_comparison(tmp_path, tmp_path / "cases.json")
-    comparison = json.loads((tmp_path / "comparison-private.json").read_text())
-    judgments = [
-        {
-            "id": key,
-            "winner": next(k for k, v in mapping.items() if v == "adapter"),
-            "meaning": {"A": True, "B": True, "C": True},
-            "reason": "synthetic gate test",
-        }
-        for key, mapping in comparison["mapping"].items()
-    ]
-    write_json(
-        tmp_path / "judgments.json",
-        {"comparison_hash": result["comparison_hash"], "judgments": judgments},
-    )
-    report = import_evaluation(tmp_path, tmp_path / "judgments.json")
+    monkeypatch.setattr("multilora_tone_adapter.evaluation._fit_style_examples",
+                        lambda model, cases, references: (references, {}))
+    comparison, judgments = run_comparison(tmp_path, covered_cases())
+    import_judgments(tmp_path, comparison, judgments)
+    select_candidate(tmp_path)
+    cases = covered_cases("Final")[:count]
+    if count < 50:
+        with pytest.raises(ValueError, match="at least 50"):
+            run_comparison(tmp_path, cases, purpose="qualification")
+        with pytest.raises(ValueError, match="qualification"):
+            activate(tmp_path)
+        return
+    comparison, judgments = run_comparison(tmp_path, cases, purpose="qualification")
+    report = import_judgments(tmp_path, comparison, judgments)
     assert report["qualified"] is qualified
     assert report["scoring"] == "automated_proxy_not_human_validation"
     if qualified:
@@ -343,17 +359,9 @@ def test_committed_secret_is_caught_even_after_removal(tmp_path):
     )
 
 
-def test_altered_adapter_config_invalidates_qualified_activation(tmp_path):
-    from multilora_tone_adapter.evaluation import _artifact_binding
-
+def test_altered_adapter_config_invalidates_qualified_activation(tmp_path, monkeypatch):
     trained_fixture(tmp_path)
-    write_json(
-        tmp_path / "evaluation.json",
-        {
-            "qualified": True,
-            "binding": _artifact_binding(tmp_path),
-        },
-    )
+    qualify_synthetic(tmp_path, monkeypatch)
     activate(tmp_path)
     verify_active(tmp_path)
     write_json(tmp_path / "adapter/adapter_config.json", {"lora_parameters": {"rank": 16}})

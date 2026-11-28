@@ -4,6 +4,7 @@ import pytest
 
 from multilora_tone_adapter.common import read_jsonl
 from multilora_tone_adapter.dataset import assign_splits, build_dataset
+from multilora_tone_adapter.pair_review import REVIEW_CHECKS, review_binding, review_contract
 from multilora_tone_adapter.telegram import import_telegram
 
 
@@ -113,6 +114,18 @@ def labels_for(episodes):
     ]
 
 
+def synthetic_reviews_for(episodes, labels):
+    """Explicit passing review fixtures for synthetic unit-test pairs only."""
+    by_id = {e["id"]: e for e in episodes}
+    return [
+        {**review_binding(by_id[label["id"]], label),
+         "review_contract": review_contract(), "request_hash": "synthetic-unit-test-request",
+         "checks": {name: "pass" for name in REVIEW_CHECKS}, "verdict": "pass",
+         "reason": "Synthetic equivalent pair used by this unit test."}
+        for label in labels if label["id"] in by_id
+    ]
+
+
 def test_splits_shared_sources_and_templates_never_leak():
     episodes = independent_episodes()
     episodes[1]["source_ids"].append(episodes[0]["source_ids"][0])
@@ -137,30 +150,31 @@ def test_style_pairs_preserve_case_and_punctuation_only_changes(tmp_path):
     labels = [{"id": e["id"], "draft": e["target"].capitalize().replace("!", "."),
                "meaning_preserved": True} for e in episodes]
     out = tmp_path / "dataset"
-    manifest = build_dataset(episodes, labels, out, min_episodes=10)
+    manifest = build_dataset(episodes, labels, out, min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
     assert manifest["accepted_pairs"] == 10
     row = read_jsonl(out / "train.jsonl")[0]
     assert json.loads(row["messages"][1]["content"])["draft"] == "Apple please."
     assert row["messages"][2]["content"] == "apple please!"
 
 
-def test_style_pairs_still_reject_exact_copies(tmp_path):
+def test_exact_copies_do_not_inflate_independent_rewrite_count(tmp_path):
     episodes = independent_episodes()
     labels = labels_for(episodes)
     labels[0]["draft"] = episodes[0]["target"]
-    manifest = build_dataset(episodes, labels, tmp_path / "dataset", min_episodes=9)
+    manifest = build_dataset(episodes, labels, tmp_path / "dataset", min_episodes=9, reviews=synthetic_reviews_for(episodes, labels))
     assert manifest["accepted_pairs"] == 9
-    assert manifest["rejected"] == {"copied_target": 1}
+    assert manifest["identity_pairs"] == 0  # Floor of 10% of seven rewrite train rows.
+    assert "copied_target" not in manifest["rejected"]
 
 
 def test_build_freezes_pure_mlx_rows_and_provenance(tmp_path):
     episodes = independent_episodes()
     labels = labels_for(episodes)
     out = tmp_path / "dataset"
-    manifest = build_dataset(episodes, labels, out, min_episodes=10)
+    manifest = build_dataset(episodes, labels, out, min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
     assert manifest["counts"] == {"train": 8, "valid": 1, "test": 1}
     assert (
-        build_dataset(list(reversed(episodes)), list(reversed(labels)), out, min_episodes=10)
+        build_dataset(list(reversed(episodes)), list(reversed(labels)), out, min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
         == manifest
     )
     row = read_jsonl(out / "train.jsonl")[0]
@@ -169,7 +183,7 @@ def test_build_freezes_pure_mlx_rows_and_provenance(tmp_path):
     assert len(read_jsonl(out / "provenance.jsonl")) == 10
     (out / "train.jsonl").write_text("tampered")
     with pytest.raises(ValueError, match="changed"):
-        build_dataset(episodes, labels, out, min_episodes=10)
+        build_dataset(episodes, labels, out, min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
 
 
 def test_label_validation_and_floor(tmp_path):
@@ -177,19 +191,19 @@ def test_label_validation_and_floor(tmp_path):
     labels = labels_for(episodes)
     labels[0]["draft"] = episodes[0]["target"]
     with pytest.raises(ValueError, match="Only 9"):
-        build_dataset(episodes, labels, tmp_path / "out", min_episodes=10)
+        build_dataset(episodes, labels, tmp_path / "out", min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
     with pytest.raises(ValueError, match="unknown"):
         build_dataset(episodes, labels + [{"id": "missing"}], tmp_path / "out", 1)
     labels[0]["draft"] = "Meet at 11"
     with pytest.raises(ValueError, match="Only 9"):
-        build_dataset(episodes, labels, tmp_path / "out", min_episodes=10)
+        build_dataset(episodes, labels, tmp_path / "out", min_episodes=10, reviews=synthetic_reviews_for(episodes, labels))
 
 
 def test_private_outputs_rejected_inside_checkout(tmp_path):
     (tmp_path / ".git").mkdir()
     episodes = independent_episodes()
     with pytest.raises(ValueError, match="outside"):
-        build_dataset(episodes, labels_for(episodes), tmp_path / "out", 1)
+        build_dataset(episodes, labels_for(episodes), tmp_path / "out", 1, reviews=synthetic_reviews_for(episodes, labels_for(episodes)))
 
 
 def test_conflicting_exports_cannot_silently_replace_history(tmp_path):
@@ -212,11 +226,11 @@ def test_interrupted_dataset_write_resumes_identically(tmp_path):
     episodes = independent_episodes()
     labels = labels_for(episodes)
     out = tmp_path / "dataset"
-    manifest = build_dataset(episodes, labels, out, 10)
+    manifest = build_dataset(episodes, labels, out, 10, reviews=synthetic_reviews_for(episodes, labels))
     (out / "manifest.json").unlink()
     (out / "READY").unlink()
     (out / "test.jsonl").unlink()
-    assert build_dataset(episodes, labels, out, 10) == manifest
+    assert build_dataset(episodes, labels, out, 10, reviews=synthetic_reviews_for(episodes, labels)) == manifest
     assert (out / "READY").read_text().strip() == manifest["dataset_hash"]
 
 

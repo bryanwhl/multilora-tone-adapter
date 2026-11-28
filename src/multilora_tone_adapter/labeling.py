@@ -39,14 +39,28 @@ The draft must contain only the neutral equivalent reply text, not history, a sp
 transcript, or instructions to the style model.
 The original target is immutable. Preserve language/code-switching, intent, negation,
 uncertainty, commitments, names, numbers, dates, URLs and emails. Do not expand implicit
-references into new explicit values. Do not translate, introduce facts, or copy personal
-phrasing unchanged. If an equivalent different draft is impossible, mark meaning_preserved
-false and explain. Independently reread both versions for semantic consistency. Return only
+references into new explicit values. Do not translate or introduce facts. Leave an already
+neutral reply unchanged when rewriting would add or remove meaning; do not force a paraphrase.
+Preserve emotional intent and seriousness, rather than stripping every affective cue.
+If equivalence is uncertain, mark meaning_preserved false and explain. A separate reviewer
+will check the pair without history or your verdict. Return only
 the schema's labels object, one label per ID, with no missing/duplicate/unknown IDs.
 """
 
 
 def _numbers(text: str) -> list[str]:
+    # Normalize only explicit equivalent spellings, never infer units or time of day.
+    cardinals = dict(zip(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+        "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
+        range(21), strict=True,
+    ))
+    text = text.replace("–", "-").replace("—", "-").replace("−", "-")
+    # Deictic/definite "one" commonly substitutes for a noun, not a quantity.
+    # Do not introduce a false numeric claim when that phrasing is paraphrased.
+    text = re.sub(r"\b(the|this|that|which) one\b", r"\1 item", text, flags=re.I)
+    text = re.sub(r"\b(?:" + "|".join(cardinals) + r")\b",
+                  lambda match: str(cardinals[match.group().lower()]), text, flags=re.I)
     return sorted(re.findall(r"(?<!\w)[+-]?\d+(?:[.,:/-]\d+)*(?:%|\b)", text))
 
 
@@ -78,29 +92,56 @@ def validate_meaning(draft: str, output: str) -> list[str]:
         r"(?:ca|wo|sha|ai|do|does|did|is|are|was|were|have|has|had|"
         r"could|would|should|must|might|need|ought|dare)n['‘’]?t)\b"
     )
-    if bool(re.search(negative, draft, re.I)) != bool(re.search(negative, output, re.I)):
+    # This contraction has a fixed expansion; contextual paraphrases still need review.
+    normalized_draft = re.sub(r"\bdunno\b", "do not know", draft, flags=re.I)
+    normalized_output = re.sub(r"\bdunno\b", "do not know", output, flags=re.I)
+    if bool(re.search(negative, normalized_draft, re.I)) != bool(re.search(negative, normalized_output, re.I)):
         errors.append("changed_negation")
     if "<think>" in output or "</think>" in output:
         errors.append("reasoning_in_output")
     return errors
 
 
+def has_correction_chain(target: str) -> bool:
+    """Quarantine an explicit short asterisk correction following a full text line.
+
+    This deliberately does not match Markdown emphasis, bullets, wildcard paths,
+    footnote markers in prose, or single-line text. It does not rewrite authentic text.
+    """
+    lines = [line.strip() for line in target.splitlines() if line.strip()]
+    for index, line in enumerate(lines[1:], start=1):
+        if re.fullmatch(r"(?:\*[A-Za-z]{2,24}|[A-Za-z]{2,24}\*)", line):
+            if len(re.findall(r"\b\w+\b", lines[index - 1])) >= 2:
+                return True
+    return False
+
+
 def validate_pair(draft: str, target: str, context=None) -> list[str]:
-    errors = validate_meaning(draft, target)
     if not isinstance(draft, str) or not draft.strip():
         return ["empty_draft"]
-    if draft.strip() == target.strip():
-        errors.append("unchanged_copy")
+    errors = validate_meaning(draft, target)
+    if has_correction_chain(target):
+        errors.append("correction_chain")
     return errors
 
 
-def make_request(run_dir: Path, limit: int = 25) -> dict:
+def make_request(run_dir: Path, limit: int = 25, *, episode_ids: list[str] | None = None) -> dict:
     if not 1 <= limit <= 100:
         raise ValueError("Batch limit must be between 1 and 100")
     episodes = read_jsonl(run_dir / "episodes.jsonl")
     labeled = read_jsonl(run_dir / "labels.jsonl") if (run_dir / "labels.jsonl").exists() else []
     done = {r["id"] for r in labeled}
-    selected = [e for e in episodes if e["id"] not in done][:limit]
+    requested = None
+    if episode_ids is not None:
+        if (not isinstance(episode_ids, list) or not episode_ids
+                or any(not isinstance(key, str) for key in episode_ids)
+                or len(set(episode_ids)) != len(episode_ids) or len(episode_ids) > limit
+                or not set(episode_ids) <= {e["id"] for e in episodes}):
+            raise ValueError("Explicit episode IDs must be unique known IDs within the batch limit")
+        requested = set(episode_ids)
+    selected = [e for e in episodes
+                if (e["id"] in requested if requested is not None else e["id"] not in done)
+                and not has_correction_chain(e["target"])][:limit]
     payload = [{"id": e["id"], "context": e["context"], "target": e["target"]} for e in selected]
     request = {
         "instructions": LABEL_INSTRUCTION,
@@ -190,6 +231,12 @@ def import_labels(run_dir: Path, path: Path, *, expected_request_hash: str | Non
     existing = read_jsonl(run_dir / "labels.jsonl") if (run_dir / "labels.jsonl").exists() else []
     mapping = {row["id"]: row for row in existing}
     mapping.update({row["id"]: row for row in labels})
+    if existing and existing != list(mapping.values()):
+        archive = run_dir / "label-history" / (digest(existing) + ".jsonl")
+        if archive.exists() and read_jsonl(archive) != existing:
+            raise ValueError("Immutable label history changed")
+        if not archive.exists():
+            write_jsonl(archive, existing)
     write_jsonl(run_dir / "labels.jsonl", list(mapping.values()))
     return {
         "imported": len(labels),

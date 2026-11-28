@@ -170,3 +170,22 @@ def test_schema_type_failures_are_retryable(tmp_path, episodes, field, value):
     with pytest.raises(labeling.LabelResponseError):
         labeling.import_labels(tmp_path, path)
     assert not (tmp_path / "labels.jsonl").exists()
+
+
+def test_explicit_relabel_keeps_old_labels_and_requires_known_unique_ids(tmp_path, episodes):
+    labeling.make_request(tmp_path, 1)
+    response_path = tmp_path / "response.json"
+    response = response_for((tmp_path / "label-request.json").read_text())
+    write_json(response_path, response)
+    labeling.import_labels(tmp_path, response_path)
+    original = read_jsonl(tmp_path / "labels.jsonl")
+    result = labeling.make_request(tmp_path, 1, episode_ids=[episodes[0]["id"]])
+    assert result["count"] == 1
+    response["labels"][0]["draft"] = "A revised synthetic draft."
+    write_json(response_path, response)
+    labeling.import_labels(tmp_path, response_path)
+    assert read_jsonl(tmp_path / "label-history" / (digest(original) + ".jsonl")) == original
+    assert read_jsonl(tmp_path / "labels.jsonl")[0]["draft"] == "A revised synthetic draft."
+    for ids in ([], ["unknown"], [episodes[0]["id"], episodes[0]["id"]]):
+        with pytest.raises(ValueError, match="Explicit episode IDs"):
+            labeling.make_request(tmp_path, 25, episode_ids=ids)

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from multilora_tone_adapter import eval_worker, evaluation
-from multilora_tone_adapter.common import write_json, write_jsonl
+from multilora_tone_adapter.common import messages_for, write_json, write_jsonl
 
 
 @pytest.mark.parametrize("mode", ["base", "prompt", "adapter"])
@@ -32,10 +32,11 @@ def test_worker_inputs_match_rewrite_contract_without_mutating_request(monkeypat
         "model_path": "synthetic-model",
         "adapter_path": "synthetic-adapter",
         "cases": [
-            {"draft": "First draft", "independently_authored": True},
+            {"draft": "First draft", "independently_authored": True, "category": "actor"},
             {"draft": "Second draft", "independently_authored": True},
         ],
-        "references": ["authentic synthetic style"],
+        "references": [{"draft": "Synthetic reference draft", "target": "synthetic style"}],
+        "style_rubric": "Synthetic rubric",
         "memory_gb": 6,
     }
     original = copy.deepcopy(request)
@@ -45,13 +46,14 @@ def test_worker_inputs_match_rewrite_contract_without_mutating_request(monkeypat
     options = {"memory_gb": 6}
     if mode == "prompt":
         options["evaluation_style_references"] = original["references"]
+        options["evaluation_style_rubric"] = original["style_rubric"]
     assert calls[0] == (
         "init", Path("synthetic-model"),
         Path("synthetic-adapter") if mode == "adapter" else None,
         options,
     )
     for index, call in enumerate(calls[1:]):
-        assert call == ("rewrite", original["cases"][index]["draft"], {"max_output_tokens": 128})
+        assert call == ("rewrite", original["cases"][index]["draft"], {"max_output_tokens": 512})
 
 
 def test_worker_closes_engine_when_generation_fails(monkeypatch):
@@ -107,10 +109,11 @@ def test_parent_worker_failure_cannot_publish_comparison_or_qualification(
     worker_output,
 ):
     monkeypatch.setattr(evaluation, "_artifact_binding", lambda _: {"synthetic": True})
+    monkeypatch.setattr(evaluation, "_fit_style_examples", lambda model, cases, references: (references, {}))
     write_json(tmp_path / "model.json", {"path": "synthetic-model"})
     write_jsonl(
         tmp_path / "dataset/train.jsonl",
-        [{"messages": [{"role": "assistant", "content": "synthetic style"}]}],
+        [{"messages": messages_for("Synthetic reference draft", target="synthetic style")}],
     )
     write_json(
         tmp_path / "cases.json",

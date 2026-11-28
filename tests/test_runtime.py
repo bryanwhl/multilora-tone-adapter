@@ -5,6 +5,7 @@ import types
 from unittest.mock import Mock
 
 import pytest
+from checkpoint_fixtures import curated_dataset
 
 from multilora_tone_adapter import runtime
 from multilora_tone_adapter.common import input_contract, messages_for, write_json, write_jsonl
@@ -140,7 +141,7 @@ def test_mask_boundary_mismatch_is_rejected(fake_mlx_dataset, tmp_path):
 def test_training_failure_is_persisted_and_never_qualified(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "preflight", Mock(side_effect=RuntimeError("pressure")))
     adapter = tmp_path / "candidate"
-    write_json(tmp_path / "data/manifest.json", {"input_contract": input_contract()})
+    curated_dataset(tmp_path / "data")
     with pytest.raises(RuntimeError):
         runtime.train(tmp_path / "data", tmp_path / "model", adapter)
     metadata = json.loads((adapter / "training.json").read_text())
@@ -149,6 +150,58 @@ def test_training_failure_is_persisted_and_never_qualified(monkeypatch, tmp_path
     assert not (adapter / "adapters.safetensors").exists()
     with pytest.raises(ValueError, match="fresh"):
         runtime.train(tmp_path / "data", tmp_path / "model", adapter)
+
+
+def test_training_objective_rejects_legacy_or_mismatched_records():
+    runtime.require_training_objective({"training_objective": runtime.training_objective_contract()})
+    for record in ({}, {"training_objective": {"name": "old"}}):
+        with pytest.raises(ValueError, match="training objective"):
+            runtime.require_training_objective(record)
+
+
+def test_dataset_requires_independent_curation_and_unchanged_files(tmp_path):
+    data = tmp_path / "dataset"
+    curated_dataset(data)
+    verified = runtime.verify_dataset_contract(data)
+    assert verified["schema_version"] == 3
+    (data / "train.jsonl").write_text('{"changed": true}\n')
+    with pytest.raises(ValueError, match="changed"):
+        runtime.verify_dataset_contract(data)
+
+
+def test_dataset_rejects_unreviewed_manifest_before_model_import(tmp_path):
+    write_json(tmp_path / "manifest.json", {"input_contract": input_contract(), "schema_version": 2})
+    with pytest.raises(ValueError, match="review|curat"):
+        runtime.verify_dataset_contract(tmp_path)
+
+
+def test_evaluation_baseline_requires_paired_examples_and_keeps_copies():
+    references = [{"draft": "Thank you.", "target": "thanks!"}]
+    engine = runtime.MLXEngine("model", evaluation_style_references=references,
+                               evaluation_style_rubric="Retain the draft's meaning.")
+    references[0]["target"] = "changed"
+    assert engine._evaluation_style_references[0]["target"] == "thanks!"
+    for invalid in (["thanks!"], [{"target": "thanks!"}], [{"draft": "", "target": "thanks!"}]):
+        with pytest.raises(ValueError, match="draft/target pairs"):
+            runtime.MLXEngine("model", evaluation_style_references=invalid)
+    with pytest.raises(ValueError, match="requires paired"):
+        runtime.MLXEngine("model", evaluation_style_rubric="Style only")
+    with pytest.raises(ValueError, match="cannot be combined"):
+        runtime.MLXEngine("model", "adapter", evaluation_style_rubric="Style only")
+
+
+def test_checkpoint_inventory_includes_irregular_final_step_and_checks_integrity(tmp_path):
+    for name in ("0000003_adapters.safetensors", "0000006_adapters.safetensors",
+                 "0000009_adapters.safetensors", "adapters.safetensors"):
+        (tmp_path / name).write_bytes(name.encode())
+    inventory = runtime.checkpoint_inventory(tmp_path, 10, 3)
+    assert [entry["step"] for entry in inventory] == [3, 6, 9, 10]
+    assert inventory[-1]["file"] == "adapters.safetensors"
+    assert all(entry["sha256"] == runtime.file_sha256(tmp_path / entry["file"])
+               for entry in inventory)
+    (tmp_path / "0000006_adapters.safetensors").unlink()
+    with pytest.raises(RuntimeError, match="step 6"):
+        runtime.checkpoint_inventory(tmp_path, 10, 3)
 
 
 def test_supervisor_stops_child_when_apps_need_memory(monkeypatch):
